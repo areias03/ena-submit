@@ -171,10 +171,12 @@ fn write_manifest(cfg: &Config, context: Context, name: &str, manifest: &str) ->
 }
 
 /// Where Webin-CLI writes the receipt for `name` under `context`: `<out>/<context>/<name>/submit/`.
+/// Webin-CLI sanitizes the name into the directory component (spaces and punctuation → `_`), so we
+/// must apply the same [`sanitize`] here to locate the receipt for names containing such characters.
 pub fn receipt_path(output_dir: &Path, context: Context, name: &str) -> PathBuf {
     output_dir
         .join(context.as_str())
-        .join(name)
+        .join(sanitize(name))
         .join("submit")
         .join("receipt.xml")
 }
@@ -279,6 +281,12 @@ mod tests {
     fn receipt_path_layout() {
         let p = receipt_path(Path::new("out"), Context::Genome, "asm1");
         assert!(p.ends_with("out/genome/asm1/submit/receipt.xml"));
+    }
+
+    #[test]
+    fn receipt_path_sanitizes_name_to_match_webin_output_dir() {
+        let p = receipt_path(Path::new("out"), Context::Genome, "MAG bin.1");
+        assert!(p.ends_with("out/genome/MAG_bin.1/submit/receipt.xml"), "got: {}", p.display());
     }
 
     #[test]

@@ -60,20 +60,24 @@ pub fn parse_receipt(xml: &str) -> std::result::Result<Receipt, String> {
     loop {
         match reader.read_event() {
             Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+            Ok(Event::Start(e)) => {
                 let name = element_name(e.name().as_ref());
                 match name.as_str() {
                     "RECEIPT" => receipt.success = attr_equals(&e, b"success", "true"),
                     "ERROR" => in_message = Some(Message::Error),
                     "INFO" => in_message = Some(Message::Info),
-                    _ => {
-                        if let Some(accession) = attr_value(&e, b"accession") {
-                            receipt.accessions.push(Accession {
-                                kind: name,
-                                accession,
-                            });
-                        }
-                    }
+                    _ => record_accession(&mut receipt, name, &e),
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                // A self-closing element (e.g. `<INFO/>`) produces no matching `End`, so it must not
+                // enter a message bucket — doing so would leak `in_message` and misattribute a later
+                // element's text. It has no text children, so only its attributes matter here.
+                let name = element_name(e.name().as_ref());
+                match name.as_str() {
+                    "RECEIPT" => receipt.success = attr_equals(&e, b"success", "true"),
+                    "ERROR" | "INFO" => {}
+                    _ => record_accession(&mut receipt, name, &e),
                 }
             }
             Ok(Event::Text(t)) => {
@@ -104,6 +108,13 @@ pub fn parse_receipt(xml: &str) -> std::result::Result<Receipt, String> {
 enum Message {
     Error,
     Info,
+}
+
+/// Record the element as an accession if it carries an `accession` attribute.
+fn record_accession(receipt: &mut Receipt, kind: String, e: &quick_xml::events::BytesStart) {
+    if let Some(accession) = attr_value(e, b"accession") {
+        receipt.accessions.push(Accession { kind, accession });
+    }
 }
 
 /// Uppercased element local name as a `String` (namespaces are not expected in receipts).
@@ -205,6 +216,15 @@ mod tests {
     fn success_flag_is_case_insensitive() {
         assert!(parse_receipt(r#"<RECEIPT success="TRUE"/>"#).unwrap().success);
         assert!(!parse_receipt(r#"<RECEIPT success="False"/>"#).unwrap().success);
+    }
+
+    #[test]
+    fn empty_message_element_does_not_leak_into_later_text() {
+        // A self-closing <INFO/> must not capture the text of a later, unrelated element.
+        let xml = r#"<RECEIPT success="true"><MESSAGES><INFO/></MESSAGES><OTHER>stray text</OTHER></RECEIPT>"#;
+        let r = parse_receipt(xml).unwrap();
+        assert!(r.info.is_empty(), "info should be empty, got: {:?}", r.info);
+        assert!(r.errors.is_empty());
     }
 
     #[test]
