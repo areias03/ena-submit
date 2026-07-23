@@ -33,18 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (one file per object). Mandatory `reads` and `genome` fields are always emitted; optional fields
   (`LIBRARY_NAME`, `INSERT_SIZE`, `DESCRIPTION`, `MOLECULETYPE`, `MINGAPLENGTH`, `RUN_REF`) only when
   set; data files render one line per Webin-CLI file-type keyword. Pure functions, 9 unit tests.
-  Consumed by the submission layer in a later milestone.
+  Consumed by the submission layer (milestone 7).
 - Test coverage: unit tests for the `config` layer (defaults, file loading, malformed/unknown TOML,
   credential requirements) and the `mag_tsv` TSV writer, plus a `tests/cli.rs` integration suite
   that drives the compiled binary offline (`init` scaffolding/idempotency, `mag prepare`
-  missing-column error, not-implemented submission stubs, unknown-subcommand usage errors). Adds the
-  `tempfile` dev-dependency.
+  missing-column error, submission preflight guards, `status` rendering, unknown-subcommand usage
+  errors). Adds the `tempfile` dev-dependency.
 - Single-contig MAG chromosome support (milestone 8): `chromosome` module with a gzip-aware FASTA
   sequence scan (`sequence_names`, `single_contig_name`) and chromosome list file rendering/writing
   (`render_chromosome_list`, `write_chromosome_list_gz`, `Topology`). A MAG bin whose FASTA holds a
   single contig can be submitted as a chromosome (gzipped `CHROMOSOME_LIST` alongside the FASTA,
   linear/circular topology) rather than as anonymous contigs; multi-contig bins are unchanged. Pure,
-  offline unit tests (7); new `flate2` dependency. `mag submit` wiring lands with that command.
+  offline unit tests (7); new `flate2` dependency. `mag submit` wires this in (milestone 7).
   Implements ADR 0006.
 - Submission history and `status` (milestone 6): new `history` module implementing the append-only
   JSONL store at `.ena-submit/history.jsonl` (one `Record` per submission attempt: timestamp,
@@ -69,6 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Architecture decision records: ADR 0005 (blocking HTTP via `ureq`, recorded retroactively for
   milestone 4), ADR 0006 (single-contig MAGs as chromosomes), and ADR 0007 (append-only JSONL
   submission history for `status`, now accepted and implemented).
+- Documentation: all planned commands (`init`, `reads`, `assembly`, `mag prepare`, `mag submit`,
+  `status`) are now implemented. `docs/architecture.md` gains a Status section, and ADRs 0004/0005/
+  0006 were refreshed to drop forward-looking "later milestone / future" phrasing now that the
+  submission path and MAG chromosome wiring have landed.
 
 ### Changed
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the
