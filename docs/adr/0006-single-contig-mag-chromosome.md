@@ -29,13 +29,15 @@ Add a **fallback** to `mag submit`: for each bin, scan its FASTA and count seque
   `FASTA` and `CHROMOSOME_LIST`.
 - **Zero or multiple sequences** → unchanged; submit as contigs (FASTA only).
 
-Chromosome name, type, and topology come from optional columns on the MAG-assembly TSV, added when
-`mag submit` is implemented (a later milestone). Detection is **structural** (sequence count), read
-transparently whether the FASTA is plain or gzipped (magic-byte sniffing via the `flate2` crate) —
-"long reads" is the motivating cause, not a condition the tool checks.
+Chromosome `topology` and `chromosome_name` come from optional columns on the MAG-assembly TSV (the
+chromosome type defaults to `Chromosome`, and `chromosome_name` defaults to the bin name). Detection
+is **structural** (sequence count), read transparently whether the FASTA is plain or gzipped
+(magic-byte sniffing via the `flate2` crate) — "long reads" is the motivating cause, not a condition
+the tool checks.
 
-The FASTA scan and chromosome-list rendering land now as a standalone, unit-tested `chromosome`
-module (this milestone); the `mag submit` wiring lands with that command.
+The FASTA scan and chromosome-list rendering shipped first as a standalone, unit-tested `chromosome`
+module; `mag submit` (milestone 7) now wires it in: for a single-contig bin it writes the gzipped
+chromosome list beside the FASTA and adds `CHROMOSOME_LIST` to the genome manifest.
 
 ## Consequences
 

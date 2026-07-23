@@ -31,5 +31,5 @@ small and, via rustls + bundled webpki roots, needs no system OpenSSL.
 - TLS works out of the box with no system crypto library, easing portability.
 - Requests are issued **sequentially**, one per row. Acceptable for the small MAG sample sheets in
   scope; if a future feature needs high-volume concurrent requests, revisit the client choice.
-- Sets the precedent that ENA REST calls are blocking; the (future) submission path already shells
-  out to Webin-CLI ([ADR 0002](0002-wrap-webin-cli-hybrid.md)) rather than making HTTP calls itself.
+- Sets the precedent that ENA REST calls are blocking; the submission path shells out to Webin-CLI
+  ([ADR 0002](0002-wrap-webin-cli-hybrid.md)) rather than making HTTP calls itself.

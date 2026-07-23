@@ -30,8 +30,8 @@ MAG **assembly** submission is unchanged in spirit: it reuses [`AssemblyRecord`]
 
 - No rigid model of the MAG checklist — the tool only needs `scientific_name` and `tax_id` to exist;
   everything else is opaque pass-through, so checklist changes don't break us.
-- Adds a **network dependency** (ENA taxonomy API) and an HTTP client, scoped to `mag prepare`
-  (implemented in a later milestone). Ambiguous/unsubmittable names must be surfaced as errors.
+- Adds a **network dependency** (ENA taxonomy API) and an HTTP client, scoped to `mag prepare`.
+  Ambiguous/unsubmittable names must be surfaced as errors.
 - The three-step MAG handoff (`prepare` → upload → `submit`) from ADR 0003 still holds; only the
   content of step one changed (fill vs generate).
 - `input.rs` gains a generic order-preserving `Table` type alongside the typed reads/assembly readers.
