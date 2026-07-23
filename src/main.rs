@@ -11,6 +11,8 @@ mod error;
 mod input;
 mod mag_tsv;
 #[allow(dead_code)]
+mod manifest;
+#[allow(dead_code)]
 mod model;
 
 use anyhow::Context;

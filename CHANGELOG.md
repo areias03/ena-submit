@@ -28,6 +28,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (idempotent re-runs); unknown, ambiguous, and non-submittable names are aggregated into one
   error, while transport/HTTP failures surface as a new `Error::Network`. 10 unit tests behind a
   `TaxonomyResolver` trait (offline-testable). Implements ADR 0004.
+- Manifest rendering (milestone 5): `manifest` module with `reads_manifest` / `genome_manifest`,
+  turning a validated `ReadRecord` / `AssemblyRecord` into Webin-CLI `KEY<TAB>value` manifest text
+  (one file per object). Mandatory `reads` and `genome` fields are always emitted; optional fields
+  (`LIBRARY_NAME`, `INSERT_SIZE`, `DESCRIPTION`, `MOLECULETYPE`, `MINGAPLENGTH`, `RUN_REF`) only when
+  set; data files render one line per Webin-CLI file-type keyword. Pure functions, 9 unit tests.
+  Consumed by the submission layer in a later milestone.
+- Test coverage: unit tests for the `config` layer (defaults, file loading, malformed/unknown TOML,
+  credential requirements) and the `mag_tsv` TSV writer, plus a `tests/cli.rs` integration suite
+  that drives the compiled binary offline (`init` scaffolding/idempotency, `mag prepare`
+  missing-column error, not-implemented submission stubs, unknown-subcommand usage errors). Adds the
+  `tempfile` dev-dependency.
 
 ### Changed
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the
