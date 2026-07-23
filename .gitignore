@@ -1,0 +1,11 @@
+/target
+
+# Local credentials & runtime state — never commit
+ena-submit.toml
+.ena-submit/
+*.webinrc
+
+# Webin-CLI artifacts
+/webin-cli.jar
+/reads/
+/genome/
