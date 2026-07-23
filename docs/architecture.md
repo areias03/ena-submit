@@ -42,7 +42,7 @@ runtime; every other path (including `mag prepare`) runs without them.
 | `manifest.rs` | Render reads/genome manifest files (one per object). |
 | `mag_tsv.rs`  | Fill the `tax_id` column of a MAG sample sheet via the ENA taxonomy API. |
 | `chromosome.rs` | Detect single-contig MAG bins (gzip-aware FASTA scan) and render/write the chromosome list file for chromosome-level submission. |
-| `webin.rs`    | Shell out to `java -jar webin-cli.jar …`; preflight Java 17+/jar checks. |
+| `webin.rs`    | Shell out to `java -jar webin-cli.jar …`; preflight credentials + Java 17+/jar checks; abort the run on a rejected account. |
 | `receipt.rs`  | Parse receipt XML → accessions + status. |
 | `history.rs`  | Append-only local state (`.ena-submit/history.jsonl`). |
 | `error.rs`    | `thiserror` error enum (`anyhow` at the binary boundary). |

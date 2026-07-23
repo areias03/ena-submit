@@ -78,5 +78,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the
   `tax_id` column (resolved from `scientific_name` via the ENA taxonomy API) instead of generating
   the sheet from bin metadata. Recorded in ADR 0004, superseding the MAG-sample half of ADR 0003.
+- Credential validation is now consolidated in a single place: `webin::preflight` checks the
+  credentials (before the jar and Java checks) and returns a `Credentials` value that is passed to
+  each `webin::submit_object` call, replacing the duplicate check the submission path performed per
+  object. `Credentials` deliberately does not implement `Debug` so the password cannot leak into
+  logs or panic messages.
+- A rejected Webin account now aborts the run on the first object instead of being recorded as an
+  ordinary per-object failure. Webin-CLI exits with the same status code for every error class, so
+  the run-level `<output_dir>/webin-cli.report` (cleared before each invocation, so a stale one can
+  never abort a good run) is checked for its authentication message and turned into the new
+  `Error::InvalidCredentials`. Previously a wrong password launched a doomed JVM per input row and
+  reported N failures with the generic "validation failed" message; nothing is appended to the
+  history, since a rejected account is not an object outcome.
+- A TSV with a header but no data rows is now an input error ("no data rows") instead of a silent
+  success. The check lives in `input::Table::parse`, so every command that reads a TSV (`reads`,
+  `assembly`, `mag prepare`, `mag submit`) rejects an unfilled template rather than reporting a
+  no-op run as successful.
 
 [Unreleased]: https://github.com/areias03/ena-submit/compare/HEAD...HEAD

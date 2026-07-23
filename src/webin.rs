@@ -19,6 +19,14 @@ use crate::receipt;
 /// Minimum Java major version Webin-CLI requires.
 const MIN_JAVA_MAJOR: u32 = 17;
 
+/// Webin-CLI's run-level report, rewritten under `-outputDir` on every invocation.
+const RUN_REPORT: &str = "webin-cli.report";
+
+/// The message Webin-CLI writes to its run report when Webin rejects the submission account.
+/// Credentials cannot be checked before invoking it (there is no separate auth step), so a rejected
+/// account is detected here and turned into a run-level abort.
+const AUTH_FAILURE_MARKER: &str = "Invalid submission account user name or password";
+
 /// The fixed parameters of one Webin-CLI invocation (everything except credentials).
 pub struct WebinRun<'a> {
     pub context: Context,
@@ -32,9 +40,19 @@ pub struct WebinRun<'a> {
     pub input_dir: Option<&'a Path>,
 }
 
-/// Check that the toolchain Webin-CLI needs is present: the jar exists and Java is new enough.
-/// Called once before a submission run so a missing/old toolchain fails fast with a clear message.
-pub fn preflight(cfg: &Config) -> Result<()> {
+/// Credentials checked once per run by [`preflight`] and handed to every [`submit_object`] call,
+/// so the "are we authenticated?" question is answered in exactly one place.
+#[derive(Clone, Copy)]
+pub struct Credentials<'a> {
+    pub username: &'a str,
+    pub password: &'a str,
+}
+
+/// Check everything a submission run needs before touching any input: credentials (Webin-CLI
+/// authenticates even for validate-only runs), the jar, and a new-enough Java. Called once per run
+/// so a missing credential or toolchain fails fast with a clear message.
+pub fn preflight(cfg: &Config) -> Result<Credentials<'_>> {
+    let (username, password) = cfg.require_credentials()?;
     if !cfg.webin_cli_jar.exists() {
         return Err(Error::Config(format!(
             "Webin-CLI jar not found at {} — download it from \
@@ -54,7 +72,7 @@ pub fn preflight(cfg: &Config) -> Result<()> {
     // `java -version` prints to stderr.
     let text = String::from_utf8_lossy(&version_output.stderr);
     match parse_java_major(&text) {
-        Some(major) if major >= MIN_JAVA_MAJOR => Ok(()),
+        Some(major) if major >= MIN_JAVA_MAJOR => Ok(Credentials { username, password }),
         Some(major) => Err(Error::Config(format!(
             "Java {major} is too old; Webin-CLI needs Java {MIN_JAVA_MAJOR}+"
         ))),
@@ -69,13 +87,14 @@ pub fn preflight(cfg: &Config) -> Result<()> {
 /// submission) read the receipt. Returns a history [`Record`] describing the outcome.
 ///
 /// A per-object validation/submission *failure* is captured in the returned `Record` (so the caller
-/// records it and moves on); only infrastructure failures (cannot write the manifest, cannot spawn
-/// the process) are returned as `Err` and abort the run.
-pub fn submit_object(cfg: &Config, run: &WebinRun) -> Result<Record> {
-    let (username, password) = cfg.require_credentials()?;
-
+/// records it and moves on). Run-level failures — cannot write the manifest, cannot spawn the
+/// process, or Webin rejected the account — are returned as `Err` and abort the run.
+pub fn submit_object(cfg: &Config, run: &WebinRun, creds: Credentials<'_>) -> Result<Record> {
     let manifest_path = write_manifest(cfg, run.context, run.name, run.manifest)?;
-    let args = build_args(cfg, run, &manifest_path, username, password);
+    let args = build_args(cfg, run, &manifest_path, creds);
+
+    // Drop any report left by an earlier invocation so what we read back is definitely this run's.
+    clear_run_report(cfg);
 
     tracing::info!(name = run.name, context = %run.context, mode = run.mode.flag(), "invoking webin-cli");
     let status = Command::new(&cfg.java_bin)
@@ -89,8 +108,34 @@ pub fn submit_object(cfg: &Config, run: &WebinRun) -> Result<Record> {
             ))
         })?;
 
+    // A rejected account is not this object's fault and would repeat for every remaining one, so
+    // abort the whole run with a clear message instead of recording N identical failures.
+    if !status.success() && auth_was_rejected(cfg) {
+        return Err(Error::InvalidCredentials);
+    }
+
     let record = Record::now(run.context, run.name, run.mode, run.environment);
     Ok(interpret(cfg, run, status.success(), record))
+}
+
+/// Path of Webin-CLI's run-level report under the configured output directory.
+fn run_report_path(cfg: &Config) -> PathBuf {
+    cfg.output_dir.join(RUN_REPORT)
+}
+
+/// Remove a stale run report, ignoring a missing file (and any other error: this is best-effort
+/// hygiene, and [`auth_was_rejected`] is only consulted after a failing run anyway).
+fn clear_run_report(cfg: &Config) {
+    let _ = std::fs::remove_file(run_report_path(cfg));
+}
+
+/// Whether Webin-CLI's run report says the submission account was rejected. An unreadable or absent
+/// report means "not an auth failure" — the object-level failure path then applies as before.
+fn auth_was_rejected(cfg: &Config) -> bool {
+    match std::fs::read_to_string(run_report_path(cfg)) {
+        Ok(text) => text.contains(AUTH_FAILURE_MARKER),
+        Err(_) => false,
+    }
 }
 
 /// Turn Webin-CLI's exit status into a finalized history [`Record`], reading the receipt on a real
@@ -133,8 +178,7 @@ fn build_args(
     cfg: &Config,
     run: &WebinRun,
     manifest_path: &Path,
-    username: &str,
-    password: &str,
+    creds: Credentials<'_>,
 ) -> Vec<String> {
     let mut args = vec![
         "-jar".to_string(),
@@ -142,9 +186,9 @@ fn build_args(
         "-context".to_string(),
         run.context.as_str().to_string(),
         "-userName".to_string(),
-        username.to_string(),
+        creds.username.to_string(),
         "-password".to_string(),
-        password.to_string(),
+        creds.password.to_string(),
         "-manifest".to_string(),
         manifest_path.to_string_lossy().into_owned(),
         "-outputDir".to_string(),
@@ -235,6 +279,10 @@ mod tests {
         }
     }
 
+    fn creds<'a>(username: &'a str, password: &'a str) -> Credentials<'a> {
+        Credentials { username, password }
+    }
+
     #[test]
     fn build_args_has_core_flags_for_validate_test() {
         let dir = tempfile::tempdir().unwrap();
@@ -247,7 +295,7 @@ mod tests {
             environment: Environment::Test,
             input_dir: None,
         };
-        let args = build_args(&cfg, &run, Path::new("m.manifest"), "Webin-1", "secret");
+        let args = build_args(&cfg, &run, Path::new("m.manifest"), creds("Webin-1", "secret"));
         assert!(args.windows(2).any(|w| w == ["-context", "genome"]));
         assert!(args.windows(2).any(|w| w == ["-userName", "Webin-1"]));
         assert!(args.windows(2).any(|w| w == ["-password", "secret"]));
@@ -270,7 +318,7 @@ mod tests {
             environment: Environment::Production,
             input_dir: Some(Path::new("data")),
         };
-        let args = build_args(&cfg, &run, Path::new("m.manifest"), "u", "p");
+        let args = build_args(&cfg, &run, Path::new("m.manifest"), creds("u", "p"));
         assert!(args.iter().any(|a| a == "-submit"));
         assert!(!args.iter().any(|a| a == "-test"));
         assert!(args.windows(2).any(|w| w == ["-inputDir", "data"]));
@@ -309,8 +357,61 @@ mod tests {
     fn preflight_reports_missing_jar() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(dir.path()); // jar path does not exist
-        let err = preflight(&cfg).unwrap_err().to_string();
-        assert!(err.contains("jar not found"), "got: {err}");
+        // `Credentials` is deliberately not `Debug` (it holds a password), so match instead of unwrap.
+        match preflight(&cfg) {
+            Err(e) => assert!(e.to_string().contains("jar not found"), "got: {e}"),
+            Ok(_) => panic!("expected a missing-jar error"),
+        }
+    }
+
+    #[test]
+    fn preflight_requires_credentials_before_touching_the_toolchain() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(dir.path());
+        cfg.webin_password = None;
+        // Credentials are checked first, so this fails on the account, not the (also missing) jar.
+        assert!(matches!(
+            preflight(&cfg),
+            Err(Error::MissingCredentials)
+        ));
+    }
+
+    #[test]
+    fn auth_rejection_is_detected_from_the_run_report() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path());
+        std::fs::create_dir_all(&cfg.output_dir).unwrap();
+        let report = run_report_path(&cfg);
+
+        // No report at all (Webin-CLI died before writing one) is not an auth failure.
+        assert!(!auth_was_rejected(&cfg));
+
+        // A run that failed for some other reason must stay an object-level failure.
+        std::fs::write(&report, "2026-07-24T09:00:00 ERROR: Invalid manifest field 'STUDY'\n").unwrap();
+        assert!(!auth_was_rejected(&cfg));
+
+        // The real Webin-CLI message, as written to the report alongside its stack trace.
+        std::fs::write(
+            &report,
+            "2026-07-24T09:00:00 ERROR: Invalid submission account user name or password. \
+             Please try enclosing your password in single quotes.\n\
+             uk.ac.ebi.ena.webin.cli.WebinCliException: Invalid submission account user name or \
+             password.\n\tat uk.ac.ebi.ena.webin.cli.service.LoginService.login(LoginService.java:74)\n",
+        )
+        .unwrap();
+        assert!(auth_was_rejected(&cfg));
+
+        // Clearing it before an invocation means a stale report cannot abort a later good run.
+        clear_run_report(&cfg);
+        assert!(!report.exists());
+        assert!(!auth_was_rejected(&cfg));
+    }
+
+    #[test]
+    fn clear_run_report_tolerates_a_missing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = config(dir.path()); // output_dir does not even exist yet
+        clear_run_report(&cfg); // must not panic
     }
 
     #[test]

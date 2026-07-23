@@ -189,14 +189,6 @@ pub fn run(cli: Cli) -> Result<()> {
     }
 }
 
-/// Credentials + toolchain checks shared by every submission command. Webin-CLI authenticates even
-/// for validate-only runs, so credentials are required up front regardless of mode.
-fn prepare_submission(cfg: &Config) -> Result<()> {
-    cfg.require_credentials()?;
-    webin::preflight(cfg)?;
-    Ok(())
-}
-
 /// Validate/submit each read run, appending a history record per object.
 fn submit_reads(
     cwd: &Path,
@@ -206,7 +198,7 @@ fn submit_reads(
     mode: SubmitMode,
     env: Environment,
 ) -> Result<()> {
-    prepare_submission(cfg)?;
+    let creds = webin::preflight(cfg)?;
     let records = crate::input::read_reads(input)?;
     let history = History::at(cwd);
     let mut summary = Summary::default();
@@ -220,7 +212,7 @@ fn submit_reads(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run)?;
+        let outcome = webin::submit_object(cfg, &run, creds)?;
         summary.record(&outcome);
         history.append(&outcome)?;
     }
@@ -236,7 +228,7 @@ fn submit_assemblies(
     mode: SubmitMode,
     env: Environment,
 ) -> Result<()> {
-    prepare_submission(cfg)?;
+    let creds = webin::preflight(cfg)?;
     let records = crate::input::read_assemblies(input)?;
     let history = History::at(cwd);
     let mut summary = Summary::default();
@@ -250,7 +242,7 @@ fn submit_assemblies(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run)?;
+        let outcome = webin::submit_object(cfg, &run, creds)?;
         summary.record(&outcome);
         history.append(&outcome)?;
     }
@@ -268,7 +260,7 @@ fn submit_mags(
     mode: SubmitMode,
     env: Environment,
 ) -> Result<()> {
-    prepare_submission(cfg)?;
+    let creds = webin::preflight(cfg)?;
     let bins = crate::input::read_mag_assemblies(input)?;
     let map = crate::input::read_sample_map(samples)?;
 
@@ -299,7 +291,7 @@ fn submit_mags(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run)?;
+        let outcome = webin::submit_object(cfg, &run, creds)?;
         summary.record(&outcome);
         history.append(&outcome)?;
     }

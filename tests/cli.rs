@@ -74,6 +74,25 @@ fn mag_prepare_missing_scientific_name_errors_offline() {
 }
 
 #[test]
+fn header_only_input_is_rejected_offline() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("mag_samples.tsv");
+    // An unfilled template (header, no data rows) must be an error, not a silent no-op.
+    std::fs::write(&input, "sample_alias\ttax_id\tscientific_name\n").unwrap();
+
+    let out = ena_submit(dir.path())
+        .args(["mag", "prepare"])
+        .arg(&input)
+        .args(["-o", "out.tsv"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(stderr(&out).contains("no data rows"), "stderr: {}", stderr(&out));
+    assert!(!dir.path().join("out.tsv").exists(), "must not write output on error");
+}
+
+#[test]
 fn submission_without_credentials_is_rejected_offline() {
     let dir = tempfile::tempdir().unwrap();
     // No config file and no credentials in the environment: the run fails fast, before any input

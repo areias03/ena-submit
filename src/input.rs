@@ -39,7 +39,8 @@ impl Table {
     }
 
     /// Parse TSV text. Blank lines are skipped. Every data row must have the same number of cells
-    /// as the header row.
+    /// as the header row, and at least one data row is required — a header-only file is almost
+    /// always an unfilled template, and silently "succeeding" with nothing to do hides that.
     pub fn parse(path: PathBuf, text: &str) -> Result<Table> {
         let mut lines = text
             .lines()
@@ -77,6 +78,12 @@ impl Table {
             return Err(Error::Input {
                 path,
                 message: problems.join("\n"),
+            });
+        }
+        if rows.is_empty() {
+            return Err(Error::Input {
+                path,
+                message: "no data rows: the file has a header but nothing to process".to_string(),
             });
         }
         Ok(Table {
@@ -592,6 +599,17 @@ mod tests {
         assert_eq!(t.rows[1], ["4", "5", "6"]);
         assert_eq!(t.column("B"), Some(1)); // case-insensitive
         assert_eq!(t.column("missing"), None);
+    }
+
+    #[test]
+    fn header_only_table_is_an_error() {
+        // An unfilled template must not be reported as a successful no-op run.
+        let err = Table::parse(PathBuf::from("t.tsv"), "a\tb\n").unwrap_err();
+        assert!(err.to_string().contains("no data rows"), "got: {err}");
+
+        // Trailing blank lines do not count as data.
+        let err = Table::parse(PathBuf::from("t.tsv"), "a\tb\n\n  \n").unwrap_err();
+        assert!(err.to_string().contains("no data rows"), "got: {err}");
     }
 
     #[test]

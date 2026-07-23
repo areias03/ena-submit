@@ -37,6 +37,14 @@ pub enum Error {
     )]
     MissingCredentials,
 
+    /// Webin rejected the submission account. Run-level, not object-level: every remaining object
+    /// would fail identically, so the run aborts instead of recording a failure per object.
+    #[error(
+        "Webin rejected the submission account: check WEBIN_USERNAME and WEBIN_PASSWORD \
+         (a password containing shell metacharacters may need quoting)"
+    )]
+    InvalidCredentials,
+
     #[error("refusing to overwrite existing file: {0}")]
     WouldOverwrite(PathBuf),
 
