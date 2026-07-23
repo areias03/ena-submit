@@ -9,6 +9,7 @@ mod config;
 mod error;
 #[allow(dead_code)]
 mod input;
+mod mag_tsv;
 #[allow(dead_code)]
 mod model;
 

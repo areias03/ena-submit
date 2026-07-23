@@ -156,7 +156,7 @@ pub fn run(cli: Cli) -> Result<()> {
 
         Command::Mag(MagCommand::Prepare { input, output }) => {
             tracing::info!(input = %input.display(), output = %output.display(), "mag prepare");
-            Err(Error::NotImplemented("mag prepare: tax_id fill (milestone 4)"))
+            crate::mag_tsv::prepare(&input, &output)
         }
 
         Command::Mag(MagCommand::Submit {

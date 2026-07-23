@@ -40,6 +40,12 @@ pub enum Error {
     #[error("refusing to overwrite existing file: {0}")]
     WouldOverwrite(PathBuf),
 
+    /// A hard failure contacting the ENA taxonomy service (connection, HTTP status, malformed body).
+    /// Distinct from per-row resolution problems (unknown/ambiguous names), which aggregate into
+    /// [`Error::Input`].
+    #[error("network error contacting {url}: {message}")]
+    Network { url: String, message: String },
+
     /// A feature that is planned but not yet wired up.
     #[error("not yet implemented: {0}")]
     NotImplemented(&'static str),
