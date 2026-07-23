@@ -11,15 +11,17 @@ and records an auditable local history.
 
 ## Status
 
-Early development. Implemented so far:
+All planned commands are implemented:
 
 - `init` — scaffold `ena-submit.toml` and template input TSVs.
-- Typed, fully-validated TSV input for reads and assemblies.
+- Typed, fully-validated TSV input for reads, assemblies, and MAG bins.
 - `mag prepare` — complete a MAG sample sheet by resolving each row's `scientific_name` to a
   `tax_id` via the ENA taxonomy API.
+- `reads` / `assembly` / `mag submit` — render manifests and drive Webin-CLI to validate or submit,
+  parsing the receipt for accessions. `mag submit` submits single-contig bins as chromosomes.
 - `status` — render the local append-only submission history (`.ena-submit/history.jsonl`).
 
-Submission (`reads`, `assembly`, `mag submit`) and receipt handling are in progress.
+Actual validation/submission requires Java 17+ and the Webin-CLI jar (see Requirements).
 
 ## Requirements
 

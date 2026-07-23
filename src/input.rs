@@ -16,8 +16,9 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
+use crate::chromosome::Topology;
 use crate::error::{Error, Result};
-use crate::model::{AssemblyFile, AssemblyRecord, ReadFile, ReadFileKind, ReadRecord};
+use crate::model::{AssemblyFile, AssemblyRecord, MagBin, ReadFile, ReadFileKind, ReadRecord};
 
 /// A parsed tab-separated table: header row plus data rows, order preserved.
 #[derive(Debug, Clone)]
@@ -428,6 +429,98 @@ fn valid_assemblyname(name: &str, row: &mut Row) -> bool {
     true
 }
 
+/// Mandatory columns for a MAG-assembly TSV. `sample`/`assembly_type` are supplied by the tool
+/// (from the registered-samples mapping and the fixed MAG value), so they are not user columns.
+const MAG_ASSEMBLIES_REQUIRED: &[&str] = &[
+    "bin_name",
+    "assemblyname",
+    "study",
+    "coverage",
+    "program",
+    "platform",
+    "fasta",
+];
+
+/// Parse a MAG-assembly TSV into validated [`MagBin`]s (one per bin).
+pub fn read_mag_assemblies(path: &Path) -> Result<Vec<MagBin>> {
+    mag_assemblies_from_table(&Table::read(path)?)
+}
+
+fn mag_assemblies_from_table(table: &Table) -> Result<Vec<MagBin>> {
+    let index = table.header_index();
+    ensure_columns(table, MAG_ASSEMBLIES_REQUIRED)?;
+
+    let mut problems = Vec::new();
+    let mut out = Vec::new();
+    for (i, cells) in table.rows.iter().enumerate() {
+        let mut row = Row {
+            index: &index,
+            cells,
+            number: i + 1,
+            problems: &mut problems,
+        };
+
+        let bin_name = row.required("bin_name");
+        let assemblyname = row
+            .required("assemblyname")
+            .filter(|n| valid_assemblyname(n, &mut row));
+        let study = row.required("study");
+        let coverage = row.required("coverage");
+        let program = row.required("program");
+        let platform = row.required("platform");
+        let fasta = row.required("fasta");
+        let run_ref = row.opt("run_ref").map(str::to_string);
+        let description = row.opt("description").map(str::to_string);
+        let chromosome_name = row.opt("chromosome_name").map(str::to_string);
+        let topology = match row.opt("topology") {
+            None => Some(Topology::default()),
+            Some(v) => match Topology::parse(v) {
+                Some(t) => Some(t),
+                None => {
+                    row.problem(format!("topology '{v}' is not 'linear' or 'circular'"));
+                    None
+                }
+            },
+        };
+
+        if let (
+            Some(bin_name),
+            Some(assemblyname),
+            Some(study),
+            Some(coverage),
+            Some(program),
+            Some(platform),
+            Some(fasta),
+            Some(topology),
+        ) = (
+            bin_name,
+            assemblyname,
+            study,
+            coverage,
+            program,
+            platform,
+            fasta,
+            topology,
+        ) {
+            out.push(MagBin {
+                bin_name,
+                assemblyname,
+                study,
+                coverage,
+                program,
+                platform,
+                fasta: fasta.into(),
+                run_ref,
+                description,
+                topology,
+                chromosome_name,
+            });
+        }
+    }
+
+    finish(table, problems, out)
+}
+
 /// Read a `bin_name -> sample_accession` mapping TSV (used to submit MAG assemblies).
 pub fn read_sample_map(path: &Path) -> Result<HashMap<String, String>> {
     let table = Table::read(path)?;
@@ -621,6 +714,51 @@ mod tests {
         let err = reads_from_table(&t).unwrap_err().to_string();
         assert!(err.contains("row 1"), "got: {err}");
         assert!(err.contains("row 2"), "got: {err}");
+    }
+
+    const MAG_HEADER: &str =
+        "bin_name\tassemblyname\tstudy\tcoverage\tprogram\tplatform\tfasta\ttopology";
+
+    #[test]
+    fn mag_assemblies_ok_with_topology() {
+        let t = table(&format!(
+            "{MAG_HEADER}\nbin.1\tMAG_bin.1\tPRJEB1\t25\tmetaSPAdes\tILLUMINA\tbins/bin.1.fa.gz\tcircular\n"
+        ));
+        let bins = mag_assemblies_from_table(&t).unwrap();
+        assert_eq!(bins.len(), 1);
+        assert_eq!(bins[0].bin_name, "bin.1");
+        assert_eq!(bins[0].fasta, PathBuf::from("bins/bin.1.fa.gz"));
+        assert_eq!(bins[0].topology, Topology::Circular);
+        assert_eq!(bins[0].chromosome_name, None);
+    }
+
+    #[test]
+    fn mag_assemblies_default_topology_is_linear() {
+        // No topology column at all.
+        let t = table(
+            "bin_name\tassemblyname\tstudy\tcoverage\tprogram\tplatform\tfasta\nbin.1\tMAG_bin.1\tPRJEB1\t25\tmetaSPAdes\tILLUMINA\tb.fa.gz\n",
+        );
+        let bins = mag_assemblies_from_table(&t).unwrap();
+        assert_eq!(bins[0].topology, Topology::Linear);
+    }
+
+    #[test]
+    fn mag_assemblies_bad_topology_rejected() {
+        let t = table(&format!(
+            "{MAG_HEADER}\nbin.1\tMAG_bin.1\tPRJEB1\t25\tmetaSPAdes\tILLUMINA\tb.fa.gz\tsupercoiled\n"
+        ));
+        let err = mag_assemblies_from_table(&t).unwrap_err().to_string();
+        assert!(err.contains("topology"), "got: {err}");
+    }
+
+    #[test]
+    fn mag_assemblies_missing_fasta_column_is_structural_error() {
+        let t = table(
+            "bin_name\tassemblyname\tstudy\tcoverage\tprogram\tplatform\nbin.1\tMAG_bin.1\tPRJEB1\t25\tmetaSPAdes\tILLUMINA\n",
+        );
+        let err = mag_assemblies_from_table(&t).unwrap_err().to_string();
+        assert!(err.contains("missing required column"), "got: {err}");
+        assert!(err.contains("fasta"), "got: {err}");
     }
 
     #[test]

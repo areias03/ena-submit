@@ -46,9 +46,10 @@ pub enum Error {
     #[error("network error contacting {url}: {message}")]
     Network { url: String, message: String },
 
-    /// A feature that is planned but not yet wired up.
-    #[error("not yet implemented: {0}")]
-    NotImplemented(&'static str),
+    /// One or more objects in a submission run failed to validate/submit. The per-object detail is
+    /// in the history and Webin-CLI's own output; this drives a non-zero exit code.
+    #[error("{failed} object(s) failed; see the history and the Webin-CLI output above")]
+    SubmissionFailed { failed: usize },
 }
 
 /// Convenience alias for fallible library operations.

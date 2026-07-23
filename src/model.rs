@@ -165,6 +165,30 @@ pub struct AssemblyFile {
     pub path: PathBuf,
 }
 
+/// One row of the MAG-assembly input: a single MAG bin to submit under `-context genome`.
+///
+/// Unlike [`AssemblyRecord`], a bin references its derived sample indirectly by `bin_name` (resolved
+/// against the `bin_name -> ERS…` mapping at submit time) and its `assembly_type` is always the MAG
+/// value. `topology`/`chromosome_name` drive the single-contig chromosome fallback (see ADR 0006).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MagBin {
+    /// Key into the registered-samples mapping; also the default chromosome name.
+    pub bin_name: String,
+    pub assemblyname: String,
+    pub study: String,
+    pub coverage: String,
+    pub program: String,
+    pub platform: String,
+    /// The bin's assembly FASTA (path as written in the TSV, i.e. relative to any `input_dir`).
+    pub fasta: PathBuf,
+    pub run_ref: Option<String>,
+    pub description: Option<String>,
+    /// Topology used when the bin is a single contig submitted as a chromosome.
+    pub topology: crate::chromosome::Topology,
+    /// Chromosome name for the single-contig fallback; defaults to `bin_name` when absent.
+    pub chromosome_name: Option<String>,
+}
+
 /// An accession returned by ENA in a submission receipt (milestone 7) and recorded in the local
 /// history: the accessioned object's kind (e.g. `ANALYSIS`, `RUN`, `EXPERIMENT`) and its identifier.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

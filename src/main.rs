@@ -18,6 +18,10 @@ mod mag_tsv;
 mod manifest;
 #[allow(dead_code)]
 mod model;
+#[allow(dead_code)]
+mod receipt;
+#[allow(dead_code)]
+mod webin;
 
 use anyhow::Context;
 use clap::Parser;

@@ -1,15 +1,23 @@
 //! Command-line interface: argument parsing and subcommand dispatch.
 //!
-//! Milestone 2 implements `init` (scaffolding) fully; the submission subcommands are wired into the
-//! CLI surface but return [`Error::NotImplemented`] until later milestones.
+//! Dispatch is thin: `init` scaffolds a project, `mag prepare` fills the sample sheet, `status`
+//! renders the history, and the submission commands (`reads`, `assembly`, `mag submit`) read and
+//! validate their input, render manifests, and drive Webin-CLI (via [`crate::webin`]) one object at
+//! a time, appending a history record and reporting a summary.
 
 use std::path::{Path, PathBuf};
 
 use clap::{Args, Parser, Subcommand};
 
+use crate::chromosome::{self, DEFAULT_CHROMOSOME_TYPE};
 use crate::config::{CONFIG_FILE, CONFIG_TEMPLATE, Config};
 use crate::error::{Error, Result};
-use crate::model::{Environment, SubmitMode};
+use crate::history::{History, Outcome, Record};
+use crate::manifest;
+use crate::model::{
+    AssemblyFile, AssemblyRecord, Context, Environment, MAG_ASSEMBLY_TYPE, MagBin, SubmitMode,
+};
+use crate::webin::{self, WebinRun};
 
 /// Submit reads, genome assemblies, and MAGs to the European Nucleotide Archive.
 #[derive(Debug, Parser)]
@@ -141,8 +149,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let mode = args.mode.resolve();
             let env = args.env.resolve(cfg.default_environment);
             tracing::info!(input = %args.input.display(), mode = mode.flag(), env = %env, "reads submit");
-            let _ = (&cfg, &args.input_dir);
-            Err(Error::NotImplemented("reads submission (milestone 7)"))
+            submit_reads(&cwd, &cfg, &args.input, args.input_dir.as_deref(), mode, env)
         }
 
         Command::Assembly(args) => {
@@ -150,8 +157,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let mode = args.mode.resolve();
             let env = args.env.resolve(cfg.default_environment);
             tracing::info!(input = %args.input.display(), mode = mode.flag(), env = %env, "assembly submit");
-            let _ = (&cfg, &args.input_dir);
-            Err(Error::NotImplemented("assembly submission (milestone 7)"))
+            submit_assemblies(&cwd, &cfg, &args.input, args.input_dir.as_deref(), mode, env)
         }
 
         Command::Mag(MagCommand::Prepare { input, output }) => {
@@ -170,8 +176,7 @@ pub fn run(cli: Cli) -> Result<()> {
             let mode = mode.resolve();
             let env = env.resolve(cfg.default_environment);
             tracing::info!(input = %input.display(), samples = %samples.display(), mode = mode.flag(), env = %env, "mag submit");
-            let _ = (&cfg, &input_dir);
-            Err(Error::NotImplemented("mag submission (milestone 7)"))
+            submit_mags(&cwd, &cfg, &input, &samples, input_dir.as_deref(), mode, env)
         }
 
         Command::Status => {
@@ -181,6 +186,222 @@ pub fn run(cli: Cli) -> Result<()> {
             print!("{}", crate::history::render(&records));
             Ok(())
         }
+    }
+}
+
+/// Credentials + toolchain checks shared by every submission command. Webin-CLI authenticates even
+/// for validate-only runs, so credentials are required up front regardless of mode.
+fn prepare_submission(cfg: &Config) -> Result<()> {
+    cfg.require_credentials()?;
+    webin::preflight(cfg)?;
+    Ok(())
+}
+
+/// Validate/submit each read run, appending a history record per object.
+fn submit_reads(
+    cwd: &Path,
+    cfg: &Config,
+    input: &Path,
+    input_dir: Option<&Path>,
+    mode: SubmitMode,
+    env: Environment,
+) -> Result<()> {
+    prepare_submission(cfg)?;
+    let records = crate::input::read_reads(input)?;
+    let history = History::at(cwd);
+    let mut summary = Summary::default();
+    for rec in &records {
+        let manifest = manifest::reads_manifest(rec);
+        let run = WebinRun {
+            context: Context::Reads,
+            name: rec.name.as_str(),
+            manifest: manifest.as_str(),
+            mode,
+            environment: env,
+            input_dir,
+        };
+        let outcome = webin::submit_object(cfg, &run)?;
+        summary.record(&outcome);
+        history.append(&outcome)?;
+    }
+    finish_run(summary, mode)
+}
+
+/// Validate/submit each genome assembly, appending a history record per object.
+fn submit_assemblies(
+    cwd: &Path,
+    cfg: &Config,
+    input: &Path,
+    input_dir: Option<&Path>,
+    mode: SubmitMode,
+    env: Environment,
+) -> Result<()> {
+    prepare_submission(cfg)?;
+    let records = crate::input::read_assemblies(input)?;
+    let history = History::at(cwd);
+    let mut summary = Summary::default();
+    for rec in &records {
+        let manifest = manifest::genome_manifest(rec);
+        let run = WebinRun {
+            context: Context::Genome,
+            name: rec.assemblyname.as_str(),
+            manifest: manifest.as_str(),
+            mode,
+            environment: env,
+            input_dir,
+        };
+        let outcome = webin::submit_object(cfg, &run)?;
+        summary.record(&outcome);
+        history.append(&outcome)?;
+    }
+    finish_run(summary, mode)
+}
+
+/// Validate/submit each MAG bin under `-context genome`, resolving its derived sample from the
+/// `bin_name -> ERS…` mapping and applying the single-contig chromosome fallback (ADR 0006).
+fn submit_mags(
+    cwd: &Path,
+    cfg: &Config,
+    input: &Path,
+    samples: &Path,
+    input_dir: Option<&Path>,
+    mode: SubmitMode,
+    env: Environment,
+) -> Result<()> {
+    prepare_submission(cfg)?;
+    let bins = crate::input::read_mag_assemblies(input)?;
+    let map = crate::input::read_sample_map(samples)?;
+
+    // Fail fast if any bin has no registered sample, before invoking Webin-CLI on any of them.
+    let missing: Vec<&str> = bins
+        .iter()
+        .filter(|b| !map.contains_key(&b.bin_name))
+        .map(|b| b.bin_name.as_str())
+        .collect();
+    if !missing.is_empty() {
+        return Err(Error::Input {
+            path: samples.to_path_buf(),
+            message: format!("no registered sample_accession for bin(s): {}", missing.join(", ")),
+        });
+    }
+
+    let history = History::at(cwd);
+    let mut summary = Summary::default();
+    for bin in &bins {
+        let sample = &map[&bin.bin_name];
+        let assembly = build_mag_assembly(bin, sample, input_dir)?;
+        let manifest = manifest::genome_manifest(&assembly);
+        let run = WebinRun {
+            context: Context::Genome,
+            name: bin.assemblyname.as_str(),
+            manifest: manifest.as_str(),
+            mode,
+            environment: env,
+            input_dir,
+        };
+        let outcome = webin::submit_object(cfg, &run)?;
+        summary.record(&outcome);
+        history.append(&outcome)?;
+    }
+    finish_run(summary, mode)
+}
+
+/// Build the genome [`AssemblyRecord`] for one MAG bin: fixed MAG assembly type, the resolved
+/// sample, the FASTA, and — when the bin is a single contig — a generated `CHROMOSOME_LIST`.
+fn build_mag_assembly(
+    bin: &MagBin,
+    sample: &str,
+    input_dir: Option<&Path>,
+) -> Result<AssemblyRecord> {
+    let mut files = vec![AssemblyFile {
+        kind: "FASTA".to_string(),
+        path: bin.fasta.clone(),
+    }];
+
+    // Detection reads the FASTA on disk (resolved against input_dir); the manifest keeps the
+    // input_dir-relative paths that Webin-CLI expects.
+    let fasta_disk = resolve(input_dir, &bin.fasta);
+    let chromosome_name = bin.chromosome_name.clone().unwrap_or_else(|| bin.bin_name.clone());
+    if let Some(entry) = chromosome::single_contig_entry(
+        &fasta_disk,
+        &chromosome_name,
+        DEFAULT_CHROMOSOME_TYPE,
+        bin.topology,
+    )? {
+        let list_rel = chromosome_list_path(&bin.fasta, &bin.assemblyname);
+        let list_disk = resolve(input_dir, &list_rel);
+        let content = chromosome::render_chromosome_list(&[entry]);
+        chromosome::write_chromosome_list_gz(&list_disk, &content)?;
+        tracing::info!(bin = %bin.bin_name, "single contig: submitting as chromosome");
+        files.push(AssemblyFile {
+            kind: "CHROMOSOME_LIST".to_string(),
+            path: list_rel,
+        });
+    }
+
+    Ok(AssemblyRecord {
+        assemblyname: bin.assemblyname.clone(),
+        study: bin.study.clone(),
+        sample: sample.to_string(),
+        assembly_type: MAG_ASSEMBLY_TYPE.to_string(),
+        coverage: bin.coverage.clone(),
+        program: bin.program.clone(),
+        platform: bin.platform.clone(),
+        moleculetype: None,
+        mingaplength: None,
+        description: bin.description.clone(),
+        run_ref: bin.run_ref.clone(),
+        files,
+    })
+}
+
+/// Resolve a manifest-relative path against `input_dir` (if any) to a real on-disk path.
+fn resolve(input_dir: Option<&Path>, rel: &Path) -> PathBuf {
+    match input_dir {
+        Some(dir) => dir.join(rel),
+        None => rel.to_path_buf(),
+    }
+}
+
+/// The chromosome list file path for a bin: beside its FASTA (same directory), named from the
+/// assembly so it is unique and stable. Returned relative to `input_dir`, matching the FASTA.
+fn chromosome_list_path(fasta: &Path, assemblyname: &str) -> PathBuf {
+    let file = format!("{}.chromosome_list.txt.gz", webin::sanitize(assemblyname));
+    match fasta.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent.join(file),
+        _ => PathBuf::from(file),
+    }
+}
+
+/// Running tally of a submission run's per-object outcomes.
+#[derive(Default)]
+struct Summary {
+    ok: usize,
+    failed: usize,
+}
+
+impl Summary {
+    fn record(&mut self, r: &Record) {
+        match r.outcome {
+            Outcome::Success => self.ok += 1,
+            Outcome::Failure => self.failed += 1,
+        }
+    }
+}
+
+/// Print the run summary and turn any failures into a non-zero exit.
+fn finish_run(summary: Summary, mode: SubmitMode) -> Result<()> {
+    let verb = match mode {
+        SubmitMode::Validate => "validated",
+        SubmitMode::Submit => "submitted",
+    };
+    println!("{verb}: {} ok, {} failed", summary.ok, summary.failed);
+    if summary.failed > 0 {
+        Err(Error::SubmissionFailed {
+            failed: summary.failed,
+        })
+    } else {
+        Ok(())
     }
 }
 
@@ -239,10 +460,12 @@ bin.1\t\tuncultured Bacteroides sp.\tERS1111111\thuman gut\t95.5\t2.1
 ";
 
 // Assembly parameters for `ena-submit mag submit`. `sample` is filled from registered_mags.tsv and
-// `assembly_type` is set to the MAG value automatically, so neither appears here.
+// `assembly_type` is set to the MAG value automatically, so neither appears here. `topology`
+// (linear/circular) and `chromosome_name` are optional and only apply to single-contig bins, which
+// are submitted as chromosomes; leave them blank for multi-contig bins.
 const MAG_ASSEMBLIES_TEMPLATE: &str = "\
-bin_name\tassemblyname\tstudy\tcoverage\tprogram\tplatform\tfasta\trun_ref\tdescription
-bin.1\tMAG_bin.1\tPRJEB00000\t25\tmetaSPAdes\tILLUMINA\tbins/bin.1.fasta.gz\tERR0000000\tMAG derived from ERS1111111
+bin_name\tassemblyname\tstudy\tcoverage\tprogram\tplatform\tfasta\trun_ref\tdescription\ttopology\tchromosome_name
+bin.1\tMAG_bin.1\tPRJEB00000\t25\tmetaSPAdes\tILLUMINA\tbins/bin.1.fasta.gz\tERR0000000\tMAG derived from ERS1111111\t\t
 ";
 
 // Mapping produced after you upload the completed sample sheet and receive accessions.
@@ -250,3 +473,71 @@ const REGISTERED_MAGS_TEMPLATE: &str = "\
 bin_name\tsample_accession
 bin.1\tERS2222222
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::chromosome::Topology;
+
+    fn bin(fasta: PathBuf, topology: Topology) -> MagBin {
+        MagBin {
+            bin_name: "bin.1".into(),
+            assemblyname: "MAG bin.1".into(),
+            study: "PRJEB1".into(),
+            coverage: "25".into(),
+            program: "metaSPAdes".into(),
+            platform: "ILLUMINA".into(),
+            fasta,
+            run_ref: None,
+            description: None,
+            topology,
+            chromosome_name: None,
+        }
+    }
+
+    #[test]
+    fn chromosome_list_path_sits_beside_fasta_with_sanitized_name() {
+        let p = chromosome_list_path(Path::new("bins/bin.1.fa.gz"), "MAG bin.1");
+        assert_eq!(p, PathBuf::from("bins/MAG_bin.1.chromosome_list.txt.gz"));
+
+        // No parent directory -> bare file name.
+        let p = chromosome_list_path(Path::new("bin.fa.gz"), "asm1");
+        assert_eq!(p, PathBuf::from("asm1.chromosome_list.txt.gz"));
+    }
+
+    #[test]
+    fn build_mag_assembly_multi_contig_is_fasta_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let fasta = dir.path().join("bin.fa");
+        std::fs::write(&fasta, b">c1\nACGT\n>c2\nTTTT\n").unwrap();
+
+        let b = bin(fasta.clone(), Topology::Linear);
+        let asm = build_mag_assembly(&b, "ERS999", None).unwrap();
+
+        assert_eq!(asm.assembly_type, MAG_ASSEMBLY_TYPE);
+        assert_eq!(asm.sample, "ERS999");
+        let kinds: Vec<&str> = asm.files.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["FASTA"]);
+    }
+
+    #[test]
+    fn build_mag_assembly_single_contig_adds_chromosome_list() {
+        let dir = tempfile::tempdir().unwrap();
+        // input_dir-relative FASTA; the file lives under input_dir on disk.
+        let input_dir = dir.path();
+        std::fs::write(input_dir.join("bin.fa"), b">tig1\nACGTACGT\n").unwrap();
+
+        let b = bin(PathBuf::from("bin.fa"), Topology::Circular);
+        let asm = build_mag_assembly(&b, "ERS999", Some(input_dir)).unwrap();
+
+        let kinds: Vec<&str> = asm.files.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(kinds, ["FASTA", "CHROMOSOME_LIST"]);
+
+        // The manifest carries the input_dir-relative list path, and the gzipped file exists on disk.
+        let list = &asm.files[1].path;
+        assert_eq!(list, &PathBuf::from("MAG_bin.1.chromosome_list.txt.gz"));
+        let disk = input_dir.join(list);
+        assert!(disk.exists(), "chromosome list not written to {}", disk.display());
+        assert_eq!(&std::fs::read(&disk).unwrap()[..2], &[0x1f, 0x8b]); // gzip magic
+    }
+}

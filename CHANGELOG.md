@@ -54,6 +54,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   number. `ena-submit status` now renders recorded submissions (or reports none). `Context` and
   `SubmitMode` gained serde derives; new shared `Accession` domain type. 10 unit tests plus two
   `tests/cli.rs` cases. New `serde_json` and `time` dependencies. Implements ADR 0007.
+- Submission via Webin-CLI (milestone 7): the `reads`, `assembly`, and `mag submit` commands are now
+  implemented end-to-end. New `webin` module shells out to `java -jar webin-cli.jar` (preflighting
+  Java 17+ and the jar, building the argument list, writing the manifest under `output_dir`) and new
+  `receipt` module parses the returned receipt XML (via `quick-xml`) into accessions and error
+  messages. Each object is validated/submitted one at a time and recorded in the history; failures
+  are captured per object and surface as a non-zero exit. `mag submit` resolves each bin's derived
+  sample from the `bin_name -> ERS…` mapping, sets the MAG assembly type, and applies the
+  single-contig chromosome fallback (writing a gzipped `CHROMOSOME_LIST` beside the FASTA) from ADR
+  0006. New `read_mag_assemblies` input reader and `MagBin` domain type. New `quick-xml` dependency;
+  the obsolete `Error::NotImplemented` variant was removed. Adds unit tests for receipt parsing,
+  Webin-CLI arg/version/receipt handling, the MAG reader, and the MAG-assembly builder, plus
+  integration tests for the credential and jar preflight checks.
 - Architecture decision records: ADR 0005 (blocking HTTP via `ureq`, recorded retroactively for
   milestone 4), ADR 0006 (single-contig MAGs as chromosomes), and ADR 0007 (append-only JSONL
   submission history for `status`, now accepted and implemented).

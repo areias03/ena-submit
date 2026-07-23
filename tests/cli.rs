@@ -74,17 +74,40 @@ fn mag_prepare_missing_scientific_name_errors_offline() {
 }
 
 #[test]
-fn submission_commands_report_not_implemented() {
+fn submission_without_credentials_is_rejected_offline() {
     let dir = tempfile::tempdir().unwrap();
-    // The `reads` arm returns before reading the input, so its contents are irrelevant.
+    // No config file and no credentials in the environment: the run fails fast, before any input
+    // is read or Webin-CLI is invoked. (`--validate` still authenticates, so it needs credentials.)
     let out = ena_submit(dir.path())
         .args(["reads", "reads.tsv", "--validate"])
+        .env_remove("WEBIN_USERNAME")
+        .env_remove("WEBIN_PASSWORD")
         .output()
         .unwrap();
 
     assert!(!out.status.success());
     assert!(
-        stderr(&out).contains("not yet implemented"),
+        stderr(&out).contains("missing Webin credentials"),
+        "stderr: {}",
+        stderr(&out)
+    );
+}
+
+#[test]
+fn submission_preflight_reports_missing_jar() {
+    let dir = tempfile::tempdir().unwrap();
+    // Credentials present, but the default webin-cli.jar does not exist here: preflight fails with
+    // a clear message before reading input or contacting ENA.
+    let out = ena_submit(dir.path())
+        .args(["assembly", "asm.tsv", "--validate"])
+        .env("WEBIN_USERNAME", "Webin-1")
+        .env("WEBIN_PASSWORD", "secret")
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("jar not found"),
         "stderr: {}",
         stderr(&out)
     );
