@@ -370,4 +370,29 @@ mod tests {
             "uncultured%20Bacteroides%20sp."
         );
     }
+
+    #[test]
+    fn write_table_round_trips_through_reader() {
+        let t = table("sample_alias\ttax_id\tscientific_name\nbin.1\t9606\tHomo sapiens\n");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("out.tsv");
+        write_table(&path, &t).unwrap();
+
+        let back = Table::read(&path).unwrap();
+        assert_eq!(back.headers, t.headers);
+        assert_eq!(back.rows, t.rows);
+    }
+
+    #[test]
+    fn fill_then_write_produces_exact_tsv() {
+        let t = table("tax_id\tscientific_name\n\tHomo sapiens\n");
+        let filled = fill_taxids(&t, &resolver(&[("Homo sapiens", "9606")])).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("filled.tsv");
+        write_table(&path, &filled).unwrap();
+
+        let content = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(content, "tax_id\tscientific_name\n9606\tHomo sapiens\n");
+    }
 }

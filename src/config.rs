@@ -118,3 +118,85 @@ java_bin = \"java\"
 # Where Webin-CLI writes manifests, validation reports, and receipts.
 output_dir = \".ena-submit/webin\"
 ";
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config with no credentials and all defaults, built without touching the process env.
+    fn bare() -> Config {
+        Config {
+            webin_username: None,
+            webin_password: None,
+            default_environment: Environment::Test,
+            webin_cli_jar: PathBuf::from("webin-cli.jar"),
+            java_bin: PathBuf::from("java"),
+            output_dir: PathBuf::from(".ena-submit/webin"),
+        }
+    }
+
+    #[test]
+    fn defaults_when_no_config_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = Config::load(dir.path()).unwrap();
+        // Env-independent defaults (these env overrides are not set in a normal test run).
+        assert_eq!(cfg.default_environment, Environment::Test);
+        assert_eq!(cfg.java_bin, PathBuf::from("java"));
+        assert_eq!(cfg.webin_cli_jar, PathBuf::from("webin-cli.jar"));
+        assert_eq!(cfg.output_dir, PathBuf::from(".ena-submit/webin"));
+    }
+
+    #[test]
+    fn loads_values_from_file() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(CONFIG_FILE),
+            "default_environment = \"production\"\n\
+             java_bin = \"/opt/java/bin/java\"\n\
+             webin_cli_jar = \"/tools/webin-cli.jar\"\n",
+        )
+        .unwrap();
+
+        let cfg = Config::load(dir.path()).unwrap();
+        assert_eq!(cfg.default_environment, Environment::Production);
+        assert_eq!(cfg.java_bin, PathBuf::from("/opt/java/bin/java"));
+        assert_eq!(cfg.webin_cli_jar, PathBuf::from("/tools/webin-cli.jar"));
+        // Unset key falls back to the built-in default.
+        assert_eq!(cfg.output_dir, PathBuf::from(".ena-submit/webin"));
+    }
+
+    #[test]
+    fn malformed_toml_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CONFIG_FILE), "default_environment = ").unwrap();
+        let err = Config::load(dir.path()).unwrap_err().to_string();
+        assert!(err.contains("failed to parse TOML"), "got: {err}");
+    }
+
+    #[test]
+    fn unknown_environment_value_is_error() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(CONFIG_FILE), "default_environment = \"staging\"\n").unwrap();
+        assert!(Config::load(dir.path()).is_err());
+    }
+
+    #[test]
+    fn require_credentials_reports_missing() {
+        let cfg = bare();
+        assert!(matches!(
+            cfg.require_credentials(),
+            Err(Error::MissingCredentials)
+        ));
+    }
+
+    #[test]
+    fn require_credentials_needs_both_halves() {
+        let mut cfg = bare();
+        cfg.webin_username = Some("Webin-12345".to_string());
+        // Username without password is still incomplete.
+        assert!(cfg.require_credentials().is_err());
+
+        cfg.webin_password = Some("secret".to_string());
+        assert_eq!(cfg.require_credentials().unwrap(), ("Webin-12345", "secret"));
+    }
+}
