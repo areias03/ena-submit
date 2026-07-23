@@ -83,6 +83,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   each `webin::submit_object` call, replacing the duplicate check the submission path performed per
   object. `Credentials` deliberately does not implement `Debug` so the password cannot leak into
   logs or panic messages.
+- The Webin password is now handed to Webin-CLI through an environment variable
+  (`-passwordEnv=ENA_SUBMIT_WEBIN_PASSWORD`) instead of `-password <secret>` on its command line,
+  where any local user could read it from `ps` or `/proc/<pid>/cmdline` for the duration of a
+  submission. Verified against Webin-CLI 9.0.3.
+- A run that aborts partway (currently: a rejected account) now prints what it managed to do first
+  — `aborted — submitted: 7 ok, 0 failed before stopping` — so a partial `--submit` run does not
+  leave the user reconstructing from the history file which objects already reached ENA.
+- `Credentials` fields are private and constructible only by `preflight`, so no future call site can
+  hand `submit_object` credentials that were never validated.
+- Failing to clear a stale `webin-cli.report` is now a hard error instead of being ignored: an
+  undeletable report carrying the auth message would otherwise make the *next* object's ordinary
+  failure look like a rejected account and abort a healthy run.
 - A rejected Webin account now aborts the run on the first object instead of being recorded as an
   ordinary per-object failure. Webin-CLI exits with the same status code for every error class, so
   the run-level `<output_dir>/webin-cli.report` (cleared before each invocation, so a stale one can

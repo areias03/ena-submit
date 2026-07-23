@@ -212,7 +212,11 @@ fn submit_reads(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run, creds)?;
+        let outcome = match webin::submit_object(cfg, &run, creds) {
+            Ok(outcome) => outcome,
+            // A run-level failure aborts the remaining objects; report what already landed first.
+            Err(e) => return Err(abort_run(summary, mode, e)),
+        };
         summary.record(&outcome);
         history.append(&outcome)?;
     }
@@ -242,7 +246,11 @@ fn submit_assemblies(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run, creds)?;
+        let outcome = match webin::submit_object(cfg, &run, creds) {
+            Ok(outcome) => outcome,
+            // A run-level failure aborts the remaining objects; report what already landed first.
+            Err(e) => return Err(abort_run(summary, mode, e)),
+        };
         summary.record(&outcome);
         history.append(&outcome)?;
     }
@@ -291,7 +299,11 @@ fn submit_mags(
             environment: env,
             input_dir,
         };
-        let outcome = webin::submit_object(cfg, &run, creds)?;
+        let outcome = match webin::submit_object(cfg, &run, creds) {
+            Ok(outcome) => outcome,
+            // A run-level failure aborts the remaining objects; report what already landed first.
+            Err(e) => return Err(abort_run(summary, mode, e)),
+        };
         summary.record(&outcome);
         history.append(&outcome)?;
     }
@@ -381,12 +393,30 @@ impl Summary {
     }
 }
 
-/// Print the run summary and turn any failures into a non-zero exit.
-fn finish_run(summary: Summary, mode: SubmitMode) -> Result<()> {
-    let verb = match mode {
+/// Past-tense verb describing what a run in `mode` did to its objects.
+fn verb(mode: SubmitMode) -> &'static str {
+    match mode {
         SubmitMode::Validate => "validated",
         SubmitMode::Submit => "submitted",
-    };
+    }
+}
+
+/// Report what a run achieved before a run-level error cut it short, then hand the error back. A
+/// `--submit` run that aborts partway has already sent real objects to ENA and written them to the
+/// history; saying so keeps the user from having to reconstruct it (or resubmitting by mistake).
+fn abort_run(summary: Summary, mode: SubmitMode, err: Error) -> Error {
+    println!(
+        "aborted — {}: {} ok, {} failed before stopping",
+        verb(mode),
+        summary.ok,
+        summary.failed
+    );
+    err
+}
+
+/// Print the run summary and turn any failures into a non-zero exit.
+fn finish_run(summary: Summary, mode: SubmitMode) -> Result<()> {
+    let verb = verb(mode);
     println!("{verb}: {} ok, {} failed", summary.ok, summary.failed);
     if summary.failed > 0 {
         Err(Error::SubmissionFailed {

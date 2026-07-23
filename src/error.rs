@@ -41,7 +41,8 @@ pub enum Error {
     /// would fail identically, so the run aborts instead of recording a failure per object.
     #[error(
         "Webin rejected the submission account: check WEBIN_USERNAME and WEBIN_PASSWORD \
-         (a password containing shell metacharacters may need quoting)"
+         (ena-submit passes the password to Webin-CLI without a shell, so quote it only where \
+         your own shell needs it, e.g. export WEBIN_PASSWORD='…')"
     )]
     InvalidCredentials,
 

@@ -49,6 +49,9 @@ ena-submit status
 Submission commands default to **validate-only** and target the **test** service unless you pass
 `--submit` / `--production`.
 
+Every input TSV must contain at least one data row: a file with only a header is rejected, so an
+unfilled template fails loudly instead of reporting a run with nothing to do as a success.
+
 ### MAG workflow
 
 1. `mag prepare <mags.tsv> -o mag_samples.filled.tsv` — fills the `tax_id` column from
@@ -62,6 +65,9 @@ Submission commands default to **validate-only** and target the **test** service
 `ena-submit.toml` (created by `init`) holds paths and the default test/production choice.
 Credentials come from `WEBIN_USERNAME` / `WEBIN_PASSWORD` (or the config file). Never commit
 credentials — the provided `.gitignore` excludes `ena-submit.toml` and runtime state.
+
+The password is passed to Webin-CLI through an environment variable (`-passwordEnv`), never on its
+command line, so it does not show up in `ps` output for other users on a shared machine.
 
 ## Documentation
 
