@@ -8,6 +8,8 @@ mod config;
 #[allow(dead_code)]
 mod error;
 #[allow(dead_code)]
+mod input;
+#[allow(dead_code)]
 mod model;
 
 use anyhow::Context;
