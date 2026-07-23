@@ -39,6 +39,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that drives the compiled binary offline (`init` scaffolding/idempotency, `mag prepare`
   missing-column error, not-implemented submission stubs, unknown-subcommand usage errors). Adds the
   `tempfile` dev-dependency.
+- Single-contig MAG chromosome support (milestone 8): `chromosome` module with a gzip-aware FASTA
+  sequence scan (`sequence_names`, `single_contig_name`) and chromosome list file rendering/writing
+  (`render_chromosome_list`, `write_chromosome_list_gz`, `Topology`). A MAG bin whose FASTA holds a
+  single contig can be submitted as a chromosome (gzipped `CHROMOSOME_LIST` alongside the FASTA,
+  linear/circular topology) rather than as anonymous contigs; multi-contig bins are unchanged. Pure,
+  offline unit tests (7); new `flate2` dependency. `mag submit` wiring lands with that command.
+  Implements ADR 0006.
+- Architecture decision records: ADR 0005 (blocking HTTP via `ureq`, recorded retroactively for
+  milestone 4), ADR 0006 (single-contig MAGs as chromosomes), and ADR 0007 (proposed append-only
+  JSONL submission history for `status`).
 
 ### Changed
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the

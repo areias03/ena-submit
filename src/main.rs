@@ -4,6 +4,8 @@ mod cli;
 // Skeleton modules: some public items are consumed by later milestones (input, manifest, webin,
 // history). Allow dead code here until those callers land rather than scatter per-item attributes.
 #[allow(dead_code)]
+mod chromosome;
+#[allow(dead_code)]
 mod config;
 #[allow(dead_code)]
 mod error;

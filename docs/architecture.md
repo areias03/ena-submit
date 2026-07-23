@@ -33,6 +33,7 @@ validation or file transfer.
 | `input.rs`    | Generic order-preserving `Table` + typed reads/assembly readers with row-level validation. |
 | `manifest.rs` | Render reads/genome manifest files (one per object). |
 | `mag_tsv.rs`  | Fill the `tax_id` column of a MAG sample sheet via the ENA taxonomy API. |
+| `chromosome.rs` | Detect single-contig MAG bins (gzip-aware FASTA scan) and render/write the chromosome list file for chromosome-level submission. |
 | `webin.rs`    | Shell out to `java -jar webin-cli.jar …`; preflight Java 17+/jar checks. |
 | `receipt.rs`  | Parse receipt XML → accessions + status. |
 | `history.rs`  | Append-only local state (`.ena-submit/history.jsonl`). |
@@ -57,6 +58,10 @@ ena-submit status
    saves `registered_mags.tsv` (`bin_name → ERS…`).
 3. `mag submit` — per bin: genome manifest with `ASSEMBLY_TYPE="Metagenome-Assembled Genome (MAG)"`
    and the `ERS…` sample (from the mapping) → Webin-CLI `genome` → receipt → history.
+   - **Single-contig fallback**: if the bin's FASTA holds exactly one sequence (e.g. a closed
+     long-read genome), it is submitted as a **chromosome** — a gzipped chromosome list file
+     (`CHROMOSOME_LIST`) is generated alongside the FASTA, with topology from the input (default
+     linear, `circular` when marked). Multi-contig bins submit as contigs. See ADR 0006.
 
 ## External dependencies
 
@@ -64,6 +69,6 @@ ena-submit status
 - **ENA taxonomy REST API** (`www.ebi.ac.uk/ena/taxonomy/rest`) — reached over HTTPS by `mag prepare`
   only, via the blocking `ureq` client.
 - Crates: `clap`, `serde`, `csv`, `toml`, `quick-xml`, `thiserror`, `anyhow`, `tracing`, `time`,
-  `regex`, `ureq`.
+  `regex`, `ureq`, `flate2`.
 
 See [`docs/adr/`](adr/) for the reasoning behind these choices.
