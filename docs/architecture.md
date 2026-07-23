@@ -5,6 +5,14 @@ Archive (ENA) for **reads**, **genome assemblies**, and **MAGs**. It is a thin, 
 orchestration layer over the official Java **Webin-CLI** — not a reimplementation of ENA's
 validation or file transfer.
 
+## Status
+
+All planned commands are implemented (milestones 2–8): `init`, typed/validated TSV input for reads,
+assemblies, and MAG bins, `mag prepare`, the `reads` / `assembly` / `mag submit` submission path over
+Webin-CLI (manifest rendering, receipt parsing, single-contig chromosome fallback), and `status` over
+the append-only history. Actual validation/submission requires Java 17+ and the Webin-CLI jar at
+runtime; every other path (including `mag prepare`) runs without them.
+
 ## Responsibilities
 
 - Parse and validate TSV input (one row per run / assembly / MAG bin).
