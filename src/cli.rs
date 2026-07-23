@@ -176,7 +176,10 @@ pub fn run(cli: Cli) -> Result<()> {
 
         Command::Status => {
             tracing::info!("status");
-            Err(Error::NotImplemented("status (milestone 6)"))
+            let history = crate::history::History::at(&cwd);
+            let records = history.read()?;
+            print!("{}", crate::history::render(&records));
+            Ok(())
         }
     }
 }

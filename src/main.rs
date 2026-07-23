@@ -10,6 +10,8 @@ mod config;
 #[allow(dead_code)]
 mod error;
 #[allow(dead_code)]
+mod history;
+#[allow(dead_code)]
 mod input;
 mod mag_tsv;
 #[allow(dead_code)]

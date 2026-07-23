@@ -11,7 +11,8 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 /// The Webin-CLI submission context. Reads use `reads`; both plain assemblies and MAGs use `genome`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Context {
     Reads,
     Genome,
@@ -34,7 +35,8 @@ impl fmt::Display for Context {
 }
 
 /// Whether to validate only, or validate-and-submit. Maps to Webin-CLI `-validate` / `-submit`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum SubmitMode {
     /// Validate the object without uploading. Safe, no accessions minted.
     #[default]
@@ -161,6 +163,17 @@ pub struct AssemblyFile {
     /// Webin-CLI keyword: FASTA, FLATFILE, AGP, CHROMOSOME_LIST, UNLOCALISED_LIST.
     pub kind: String,
     pub path: PathBuf,
+}
+
+/// An accession returned by ENA in a submission receipt (milestone 7) and recorded in the local
+/// history: the accessioned object's kind (e.g. `ANALYSIS`, `RUN`, `EXPERIMENT`) and its identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accession {
+    /// The kind of object accessioned, as named in the receipt element (e.g. `ANALYSIS`, `RUN`).
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// The accession identifier itself (e.g. `ERZ1234567`).
+    pub accession: String,
 }
 
 /// The `ASSEMBLY_TYPE` value that marks a genome assembly as a MAG.

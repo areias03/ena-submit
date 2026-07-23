@@ -1,14 +1,15 @@
 # 7. Append-only JSONL submission history
 
-- Status: proposed (pending the `status` milestone)
+- Status: accepted
 - Date: 2026-07-23
 
 ## Context
 
 The tool needs a durable local record of what it has submitted, so `ena-submit status` can report
 past submissions and their accessions without re-querying ENA, and so a submission run is auditable
-after the fact. This is a forward-looking decision recorded now so the surrounding milestones (MAG
-submission, chromosome fallback) can assume a stable history contract; it is not yet implemented.
+after the fact. This was recorded ahead of implementation so the surrounding milestones (MAG
+submission, chromosome fallback) could assume a stable history contract; the `status` milestone now
+implements it.
 
 Options considered for the store:
 
@@ -21,10 +22,11 @@ Options considered for the store:
 ## Decision
 
 Record submissions as **JSON Lines** in `.ena-submit/history.jsonl`: one JSON object per attempt,
-appended, never mutated. Each record carries at least a timestamp, the Webin-CLI context
-(`reads`/`genome`), the object name, the mode (`validate`/`submit`), the target environment
-(`test`/`production`), any returned accessions, the receipt-file path, and the outcome. `status`
-reads the file and renders it; the append is the tool's only write.
+appended, never mutated. Each record carries a `timestamp` (RFC 3339, UTC), the Webin-CLI `context`
+(`reads`/`genome`), the object `name`, the `mode` (`validate`/`submit`), the target `environment`
+(`test`/`production`), the `outcome` (`success`/`failure`), and optionally `accessions` (each a
+`{type, accession}` pair), the `receipt` file path, and an `error` string. `status` reads the file
+and renders it; the append is the tool's only write.
 
 ## Consequences
 
@@ -36,4 +38,5 @@ reads the file and renders it; the append is the tool's only write.
   hundreds of objects). Revisit only if history grows unexpectedly large.
 - Concurrent runs could interleave appended lines, but each line is a standalone record, so the file
   stays valid. `.ena-submit/` is already git-ignored.
-- Marked **proposed**: field names and the exact schema are fixed when the `status` milestone lands.
+- Readers ignore unknown fields, so the schema can grow without breaking older builds; a line that
+  cannot be parsed at all is surfaced as an error naming the line rather than silently dropped.

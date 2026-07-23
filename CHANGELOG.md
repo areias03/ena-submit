@@ -46,9 +46,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   linear/circular topology) rather than as anonymous contigs; multi-contig bins are unchanged. Pure,
   offline unit tests (7); new `flate2` dependency. `mag submit` wiring lands with that command.
   Implements ADR 0006.
+- Submission history and `status` (milestone 6): new `history` module implementing the append-only
+  JSONL store at `.ena-submit/history.jsonl` (one `Record` per submission attempt: timestamp,
+  context, name, mode, environment, outcome, plus optional accessions/receipt/error). `History`
+  appends records (creating the parent dir) and reads them back forward-compatibly — unknown fields
+  are ignored, a missing file is an empty history, and an unparseable line is reported with its line
+  number. `ena-submit status` now renders recorded submissions (or reports none). `Context` and
+  `SubmitMode` gained serde derives; new shared `Accession` domain type. 10 unit tests plus two
+  `tests/cli.rs` cases. New `serde_json` and `time` dependencies. Implements ADR 0007.
 - Architecture decision records: ADR 0005 (blocking HTTP via `ureq`, recorded retroactively for
-  milestone 4), ADR 0006 (single-contig MAGs as chromosomes), and ADR 0007 (proposed append-only
-  JSONL submission history for `status`).
+  milestone 4), ADR 0006 (single-contig MAGs as chromosomes), and ADR 0007 (append-only JSONL
+  submission history for `status`, now accepted and implemented).
 
 ### Changed
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the

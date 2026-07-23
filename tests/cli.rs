@@ -91,6 +91,38 @@ fn submission_commands_report_not_implemented() {
 }
 
 #[test]
+fn status_on_empty_history_reports_nothing_recorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = ena_submit(dir.path()).arg("status").output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    assert!(
+        stdout(&out).contains("No submissions recorded yet"),
+        "stdout: {}",
+        stdout(&out)
+    );
+}
+
+#[test]
+fn status_renders_recorded_submissions() {
+    let dir = tempfile::tempdir().unwrap();
+    // Seed a history file directly (the submission layer that writes these lands in milestone 7).
+    std::fs::create_dir_all(dir.path().join(".ena-submit")).unwrap();
+    std::fs::write(
+        dir.path().join(".ena-submit/history.jsonl"),
+        "{\"timestamp\":\"2026-07-23T10:00:00Z\",\"context\":\"genome\",\"name\":\"asm1\",\
+         \"mode\":\"submit\",\"environment\":\"test\",\"outcome\":\"success\",\
+         \"accessions\":[{\"type\":\"ANALYSIS\",\"accession\":\"ERZ1\"}]}\n",
+    )
+    .unwrap();
+
+    let out = ena_submit(dir.path()).arg("status").output().unwrap();
+    assert!(out.status.success(), "stderr: {}", stderr(&out));
+    let text = stdout(&out);
+    assert!(text.contains("asm1"), "stdout: {text}");
+    assert!(text.contains("ANALYSIS=ERZ1"), "stdout: {text}");
+}
+
+#[test]
 fn unknown_command_is_usage_error() {
     let dir = tempfile::tempdir().unwrap();
     let out = ena_submit(dir.path()).arg("frobnicate").output().unwrap();

@@ -68,7 +68,7 @@ ena-submit status
 - **Webin-CLI jar** (`enasequence/webin-cli`) and **Java 17+** at runtime.
 - **ENA taxonomy REST API** (`www.ebi.ac.uk/ena/taxonomy/rest`) — reached over HTTPS by `mag prepare`
   only, via the blocking `ureq` client.
-- Crates: `clap`, `serde`, `csv`, `toml`, `quick-xml`, `thiserror`, `anyhow`, `tracing`, `time`,
-  `regex`, `ureq`, `flate2`.
+- Crates: `clap`, `serde`, `serde_json`, `csv`, `toml`, `quick-xml`, `thiserror`, `anyhow`,
+  `tracing`, `time`, `regex`, `ureq`, `flate2`.
 
 See [`docs/adr/`](adr/) for the reasoning behind these choices.

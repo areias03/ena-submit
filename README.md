@@ -17,8 +17,9 @@ Early development. Implemented so far:
 - Typed, fully-validated TSV input for reads and assemblies.
 - `mag prepare` — complete a MAG sample sheet by resolving each row's `scientific_name` to a
   `tax_id` via the ENA taxonomy API.
+- `status` — render the local append-only submission history (`.ena-submit/history.jsonl`).
 
-Submission (`reads`, `assembly`, `mag submit`), `status`, and receipt handling are in progress.
+Submission (`reads`, `assembly`, `mag submit`) and receipt handling are in progress.
 
 ## Requirements
 
