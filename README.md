@@ -27,6 +27,8 @@ Actual validation/submission requires Java 17+ and the Webin-CLI jar (see Requir
 
 - Rust (edition 2024).
 - For actual submission: **Java 17+** and the **Webin-CLI** jar (not needed for `mag prepare`).
+  Webin-CLI **1.8.12 or newer** is required, since the password is passed via `-passwordEnv`;
+  verified against 9.0.3. Any current release is fine — 1.8.12 dates from 2019.
 
 ## Install
 

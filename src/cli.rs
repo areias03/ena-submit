@@ -212,13 +212,11 @@ fn submit_reads(
             environment: env,
             input_dir,
         };
-        let outcome = match webin::submit_object(cfg, &run, creds) {
-            Ok(outcome) => outcome,
-            // A run-level failure aborts the remaining objects; report what already landed first.
-            Err(e) => return Err(abort_run(summary, mode, e)),
-        };
-        summary.record(&outcome);
-        history.append(&outcome)?;
+        // Every error in here is run-level, so it aborts the remaining objects — but only after
+        // reporting what already landed.
+        if let Err(e) = run_object(cfg, &history, &mut summary, &run, creds) {
+            return Err(abort_run(summary, mode, e));
+        }
     }
     finish_run(summary, mode)
 }
@@ -246,13 +244,11 @@ fn submit_assemblies(
             environment: env,
             input_dir,
         };
-        let outcome = match webin::submit_object(cfg, &run, creds) {
-            Ok(outcome) => outcome,
-            // A run-level failure aborts the remaining objects; report what already landed first.
-            Err(e) => return Err(abort_run(summary, mode, e)),
-        };
-        summary.record(&outcome);
-        history.append(&outcome)?;
+        // Every error in here is run-level, so it aborts the remaining objects — but only after
+        // reporting what already landed.
+        if let Err(e) = run_object(cfg, &history, &mut summary, &run, creds) {
+            return Err(abort_run(summary, mode, e));
+        }
     }
     finish_run(summary, mode)
 }
@@ -289,7 +285,10 @@ fn submit_mags(
     let mut summary = Summary::default();
     for bin in &bins {
         let sample = &map[&bin.bin_name];
-        let assembly = build_mag_assembly(bin, sample, input_dir)?;
+        let assembly = match build_mag_assembly(bin, sample, input_dir) {
+            Ok(assembly) => assembly,
+            Err(e) => return Err(abort_run(summary, mode, e)),
+        };
         let manifest = manifest::genome_manifest(&assembly);
         let run = WebinRun {
             context: Context::Genome,
@@ -299,13 +298,11 @@ fn submit_mags(
             environment: env,
             input_dir,
         };
-        let outcome = match webin::submit_object(cfg, &run, creds) {
-            Ok(outcome) => outcome,
-            // A run-level failure aborts the remaining objects; report what already landed first.
-            Err(e) => return Err(abort_run(summary, mode, e)),
-        };
-        summary.record(&outcome);
-        history.append(&outcome)?;
+        // Every error in here is run-level, so it aborts the remaining objects — but only after
+        // reporting what already landed.
+        if let Err(e) = run_object(cfg, &history, &mut summary, &run, creds) {
+            return Err(abort_run(summary, mode, e));
+        }
     }
     finish_run(summary, mode)
 }
@@ -393,6 +390,22 @@ impl Summary {
     }
 }
 
+/// Validate/submit one object and record the outcome. Returning `Err` means the *run* cannot
+/// continue (Webin-CLI unusable, account rejected, history unwritable) — never that this object
+/// merely failed validation, which is captured in the recorded outcome instead. Keeping the tally
+/// and the history append together here means an aborted run reports the same numbers it wrote.
+fn run_object(
+    cfg: &Config,
+    history: &History,
+    summary: &mut Summary,
+    run: &WebinRun,
+    creds: webin::Credentials<'_>,
+) -> Result<()> {
+    let outcome = webin::submit_object(cfg, run, creds)?;
+    summary.record(&outcome);
+    history.append(&outcome)
+}
+
 /// Past-tense verb describing what a run in `mode` did to its objects.
 fn verb(mode: SubmitMode) -> &'static str {
     match mode {
@@ -405,12 +418,16 @@ fn verb(mode: SubmitMode) -> &'static str {
 /// `--submit` run that aborts partway has already sent real objects to ENA and written them to the
 /// history; saying so keeps the user from having to reconstruct it (or resubmitting by mistake).
 fn abort_run(summary: Summary, mode: SubmitMode, err: Error) -> Error {
-    println!(
-        "aborted — {}: {} ok, {} failed before stopping",
-        verb(mode),
-        summary.ok,
-        summary.failed
-    );
+    // Nothing was attempted (the run died on its first object), so there is no partial run to
+    // report — saying "0 ok, 0 failed" would imply objects were processed when none were.
+    if summary.ok + summary.failed > 0 {
+        println!(
+            "aborted — {}: {} ok, {} failed before stopping",
+            verb(mode),
+            summary.ok,
+            summary.failed
+        );
+    }
     err
 }
 

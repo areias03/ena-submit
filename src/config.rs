@@ -109,7 +109,8 @@ pub const CONFIG_TEMPLATE: &str = "\
 default_environment = \"test\"
 
 # Path to the Webin-CLI jar (download from
-# https://github.com/enasequence/webin-cli/releases/latest). Requires Java 17+.
+# https://github.com/enasequence/webin-cli/releases/latest). Requires Java 17+ and Webin-CLI
+# 1.8.12 or newer (for -passwordEnv, which keeps the password out of the process command line).
 webin_cli_jar = \"webin-cli.jar\"
 
 # Java executable used to run the jar.

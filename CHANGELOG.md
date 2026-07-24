@@ -92,9 +92,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leave the user reconstructing from the history file which objects already reached ENA.
 - `Credentials` fields are private and constructible only by `preflight`, so no future call site can
   hand `submit_object` credentials that were never validated.
-- Failing to clear a stale `webin-cli.report` is now a hard error instead of being ignored: an
-  undeletable report carrying the auth message would otherwise make the *next* object's ordinary
-  failure look like a rejected account and abort a healthy run.
+- A stale `webin-cli.report` that cannot be cleared now disables auth detection for that invocation
+  (with a warning) instead of being ignored *or* failing the run: reading it back could make an
+  ordinary failure look like a rejected account, but a leftover file in a shared output directory
+  should not kill an otherwise healthy submission. Webin-CLI rewrites the report itself.
+- Every run-level error inside a submission loop now reports what already landed before aborting.
+  Previously only the Webin-CLI call did: a failed history append or MAG chromosome-list write still
+  exited bare, which is the case where knowing what reached ENA matters most. The per-object body
+  moved into `run_object` so the tally and the history append cannot drift apart.
+- The abort line is suppressed when the run died on its first object, where "0 ok, 0 failed before
+  stopping" implied a partial run that never happened.
+- The password transport variable is named `ENA_SUBMIT_INTERNAL_WEBIN_PASSWORD`, so it is not
+  mistaken for the user-facing `ENA_SUBMIT_*` config overrides that `Config::load` reads.
+- Documented the minimum Webin-CLI version (1.8.12, which introduced `-passwordEnv`) in the README
+  and the generated config template.
 - A rejected Webin account now aborts the run on the first object instead of being recorded as an
   ordinary per-object failure. Webin-CLI exits with the same status code for every error class, so
   the run-level `<output_dir>/webin-cli.report` (cleared before each invocation, so a stale one can

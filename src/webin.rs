@@ -31,7 +31,12 @@ const AUTH_FAILURE_MARKER: &str = "Invalid submission account user name or passw
 /// `-password <secret>` would put it in the child's argv, where any local user could read it from
 /// `ps` or `/proc/<pid>/cmdline` for the life of the submission — a real exposure on the shared
 /// machines this tool runs on. A process's environment, by contrast, is readable only by its owner.
-const PASSWORD_ENV_VAR: &str = "ENA_SUBMIT_WEBIN_PASSWORD";
+///
+/// `INTERNAL` is in the name on purpose: this is set by `ena-submit` on the child process and is
+/// *not* a way to configure anything. Users set `WEBIN_PASSWORD` (see [`crate::config`]); a name
+/// matching the `ENA_SUBMIT_*` config convention would invite setting this one instead, which
+/// `Config::load` ignores.
+const PASSWORD_ENV_VAR: &str = "ENA_SUBMIT_INTERNAL_WEBIN_PASSWORD";
 
 /// The fixed parameters of one Webin-CLI invocation (everything except credentials).
 pub struct WebinRun<'a> {
@@ -104,7 +109,7 @@ pub fn submit_object(cfg: &Config, run: &WebinRun, creds: Credentials<'_>) -> Re
     let args = build_args(cfg, run, &manifest_path, creds);
 
     // Drop any report left by an earlier invocation so what we read back is definitely this run's.
-    clear_run_report(cfg)?;
+    let report_is_ours = clear_run_report(cfg);
 
     tracing::info!(name = run.name, context = %run.context, mode = run.mode.flag(), "invoking webin-cli");
     let status = Command::new(&cfg.java_bin)
@@ -122,7 +127,7 @@ pub fn submit_object(cfg: &Config, run: &WebinRun, creds: Credentials<'_>) -> Re
 
     // A rejected account is not this object's fault and would repeat for every remaining one, so
     // abort the whole run with a clear message instead of recording N identical failures.
-    if !status.success() && auth_was_rejected(cfg) {
+    if !status.success() && report_is_ours && auth_was_rejected(cfg) {
         return Err(Error::InvalidCredentials);
     }
 
@@ -136,15 +141,27 @@ fn run_report_path(cfg: &Config) -> PathBuf {
 }
 
 /// Remove a stale run report so [`auth_was_rejected`] can only ever see this invocation's output.
-/// A missing file is the normal case; any *other* failure is fatal, because a leftover report we
-/// could not delete would make the next object's ordinary failure look like an auth rejection and
-/// abort a perfectly healthy run.
-fn clear_run_report(cfg: &Config) -> Result<()> {
+/// Returns whether the report can be trusted afterwards.
+///
+/// A missing file is the normal case. If a leftover report cannot be deleted — one owned by another
+/// user in a shared output directory, say — reading it back could make the next object's ordinary
+/// failure look like a rejected account and abort a healthy run. That is not worth failing the run
+/// over either, since Webin-CLI rewrites the report itself: the auth check is simply skipped for
+/// this invocation and the ordinary per-object failure path applies.
+fn clear_run_report(cfg: &Config) -> bool {
     let path = run_report_path(cfg);
     match std::fs::remove_file(&path) {
-        Ok(()) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(e) => Err(Error::io(&path, e)),
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "could not clear the Webin-CLI run report; \
+                 auth-failure detection is disabled for this object"
+            );
+            false
+        }
     }
 }
 
@@ -302,6 +319,58 @@ mod tests {
         Credentials { username, password }
     }
 
+    /// Stand-in for `java` that records the argv and environment it was called with, so a test can
+    /// inspect how the child was actually invoked without needing a JVM or the Webin-CLI jar.
+    #[cfg(unix)]
+    fn fake_java(dir: &Path, exit_code: u8) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join("fake-java");
+        let argv = dir.join("child-argv.txt");
+        let env = dir.join("child-env.txt");
+        std::fs::write(
+            &path,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\nprintenv > {}\nexit {exit_code}\n",
+                argv.display(),
+                env.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// The `-passwordEnv` flag is only half the mechanism; this covers the other half, so a
+    /// refactor that drops the `.env()` call cannot leave every real submission authenticating
+    /// against an unset variable while the argv-level tests still pass.
+    #[cfg(unix)]
+    #[test]
+    fn submit_object_passes_the_password_through_the_environment_not_argv() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut cfg = config(dir.path());
+        cfg.java_bin = fake_java(dir.path(), 0);
+
+        let run = WebinRun {
+            context: Context::Genome,
+            name: "asm1",
+            manifest: "STUDY\tX\n",
+            mode: SubmitMode::Validate,
+            environment: Environment::Test,
+            input_dir: None,
+        };
+        submit_object(&cfg, &run, creds("Webin-1", "hunter2")).unwrap();
+
+        let argv = std::fs::read_to_string(dir.path().join("child-argv.txt")).unwrap();
+        let env = std::fs::read_to_string(dir.path().join("child-env.txt")).unwrap();
+
+        assert!(
+            env.lines().any(|l| l == format!("{PASSWORD_ENV_VAR}=hunter2")),
+            "password was not set on the child environment: {env}"
+        );
+        assert!(argv.contains(&format!("-passwordEnv={PASSWORD_ENV_VAR}")));
+        assert!(!argv.contains("hunter2"), "password leaked into argv: {argv}");
+    }
+
     #[test]
     fn build_args_has_core_flags_for_validate_test() {
         let dir = tempfile::tempdir().unwrap();
@@ -318,7 +387,7 @@ mod tests {
         assert!(args.windows(2).any(|w| w == ["-context", "genome"]));
         assert!(args.windows(2).any(|w| w == ["-userName", "Webin-1"]));
         // The password must never appear in argv — it is handed over via the environment instead.
-        assert!(args.iter().any(|a| a == "-passwordEnv=ENA_SUBMIT_WEBIN_PASSWORD"));
+        assert!(args.iter().any(|a| a == &format!("-passwordEnv={PASSWORD_ENV_VAR}")));
         assert!(
             !args.iter().any(|a| a.contains("secret")),
             "password leaked into argv: {args:?}"
@@ -426,7 +495,7 @@ mod tests {
         assert!(auth_was_rejected(&cfg));
 
         // Clearing it before an invocation means a stale report cannot abort a later good run.
-        clear_run_report(&cfg).unwrap();
+        assert!(clear_run_report(&cfg));
         assert!(!report.exists());
         assert!(!auth_was_rejected(&cfg));
     }
@@ -435,7 +504,7 @@ mod tests {
     fn clear_run_report_tolerates_a_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let cfg = config(dir.path()); // output_dir does not even exist yet
-        assert!(clear_run_report(&cfg).is_ok());
+        assert!(clear_run_report(&cfg));
     }
 
     #[test]
@@ -445,7 +514,7 @@ mod tests {
         // A directory at the report path cannot be removed with `remove_file`. Silently ignoring
         // that would let a stale report abort a later healthy run with a bogus auth error.
         std::fs::create_dir_all(run_report_path(&cfg)).unwrap();
-        assert!(clear_run_report(&cfg).is_err());
+        assert!(!clear_run_report(&cfg), "must report the report as untrustworthy");
     }
 
     #[test]
