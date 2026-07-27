@@ -9,7 +9,10 @@
 //! and the `scientific_name` cell is rewritten to match. Rows whose name is unknown, ambiguous, or
 //! not submittable are collected and reported together as one error.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::Path;
+use std::time::Duration;
 
 use serde::Deserialize;
 
@@ -19,16 +22,26 @@ use crate::input::Table;
 /// Base URL of the ENA taxonomy REST service.
 const ENA_TAXONOMY_BASE: &str = "https://www.ebi.ac.uk/ena/taxonomy/rest";
 
+/// Give up on a connection that will not open, rather than hanging the whole command.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Cap on waiting for one taxonomy response. Generous: a whole sheet is hundreds of these, but a
+/// single stalled read should not block a run indefinitely.
+const READ_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Complete `input`'s `tax_id` column and write the result to `output`.
 pub fn prepare(input: &Path, output: &Path) -> Result<()> {
     let table = Table::read(input)?;
-    let resolver = EnaTaxonomy::new();
-    let filled = fill_taxids(&table, &resolver)?;
-    write_table(output, &filled)?;
+    let resolver = Memoized::new(EnaTaxonomy::new());
+    let filled = fill_taxids(&table, &resolver);
+    // Logged on both paths: on a failing run this is what the time was spent on.
+    tracing::info!(lookups = resolver.lookups(), "taxonomy lookups issued");
+    write_table(output, &filled?)?;
     Ok(())
 }
 
 /// Outcome of resolving one scientific name.
+#[derive(Clone)]
 enum Resolution {
     /// Resolved to this taxon id.
     Found(String),
@@ -42,6 +55,45 @@ trait TaxonomyResolver {
     /// Resolve one name. `Err` signals a hard failure (network/HTTP) that should abort the run;
     /// a soft [`Resolution::Problem`] is returned in `Ok` so it can be aggregated per row.
     fn resolve(&self, scientific_name: &str) -> Result<Resolution>;
+}
+
+/// Caches another resolver's answers by name, so each distinct name costs one request per run.
+///
+/// Sample sheets repeat names heavily — the reference sheet is 2676 rows but only 282 distinct
+/// names — and the `"{genus} sp."` fallback collapses them further still, since many placeholder
+/// names share one genus. Without this, a full sheet issues thousands of duplicate requests.
+struct Memoized<R> {
+    inner: R,
+    cache: RefCell<HashMap<String, Resolution>>,
+}
+
+impl<R: TaxonomyResolver> Memoized<R> {
+    fn new(inner: R) -> Self {
+        Self {
+            inner,
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// How many distinct names were resolved — i.e. how many requests actually reached ENA.
+    fn lookups(&self) -> usize {
+        self.cache.borrow().len()
+    }
+}
+
+impl<R: TaxonomyResolver> TaxonomyResolver for Memoized<R> {
+    fn resolve(&self, scientific_name: &str) -> Result<Resolution> {
+        if let Some(hit) = self.cache.borrow().get(scientific_name) {
+            return Ok(hit.clone());
+        }
+        // Only `Ok` outcomes are cached: a hard failure aborts the run anyway, and caching one
+        // would turn a transient network blip into a permanent answer for that name.
+        let resolved = self.inner.resolve(scientific_name)?;
+        self.cache
+            .borrow_mut()
+            .insert(scientific_name.to_string(), resolved.clone());
+        Ok(resolved)
+    }
 }
 
 /// Fill the `tax_id` column of `table`, resolving each row's `scientific_name` via `resolver`.
@@ -72,28 +124,18 @@ fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> 
             problems.push(format!("row {number}: scientific_name is empty"));
             continue;
         }
-        match resolver.resolve(&name)? {
-            Resolution::Found(tax_id) => {
+        match resolve_name(&name, resolver)? {
+            RowOutcome::Filled { tax_id, rename } => {
                 row[tax_col] = tax_id;
                 filled += 1;
+                if let Some(resolved_name) = rename {
+                    // ENA checks scientific_name against tax_id, so the cell must follow.
+                    row[sci_col] = resolved_name;
+                    fallbacks += 1;
+                    tracing::info!(row = number, from = %name, "genus fallback applied");
+                }
             }
-            Resolution::Problem(reason) => match genus_fallback(&name) {
-                // The cell identifies a genus: retry the name ENA actually accepts.
-                Some(candidate) => match resolver.resolve(&candidate)? {
-                    Resolution::Found(tax_id) => {
-                        row[tax_col] = tax_id;
-                        // ENA checks scientific_name against tax_id, so the cell must follow.
-                        row[sci_col] = candidate;
-                        filled += 1;
-                        fallbacks += 1;
-                        tracing::info!(row = number, from = %name, "genus fallback applied");
-                    }
-                    Resolution::Problem(second) => problems.push(format!(
-                        "row {number}: {reason}; genus fallback '{candidate}' also failed: {second}"
-                    )),
-                },
-                None => problems.push(format!("row {number}: {reason}")),
-            },
+            RowOutcome::Problem(reason) => problems.push(format!("row {number}: {reason}")),
         }
     }
 
@@ -112,6 +154,69 @@ fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> 
         headers: table.headers.clone(),
         rows,
     })
+}
+
+/// What one row's `scientific_name` resolved to.
+enum RowOutcome {
+    /// Use this taxon id. `rename` carries the `"{genus} sp."` name to write back into the sheet
+    /// when the fallback — not the name as written — is what resolved.
+    Filled {
+        tax_id: String,
+        rename: Option<String>,
+    },
+    /// A soft problem to aggregate and report.
+    Problem(String),
+}
+
+/// Resolve one `scientific_name`, applying the `"{genus} sp."` fallback where it applies.
+///
+/// A GTDB placeholder goes straight to the fallback: a `sp<digits>` epithet is a GTDB accession
+/// that matches nothing in ENA (the endpoint answers with an empty list for these), so looking the
+/// name up as written spends a request that cannot succeed. Every other name — including a bare
+/// genus, which does resolve, to a non-submittable taxon — is tried as written first, so a name
+/// ENA accepts is never second-guessed.
+fn resolve_name(name: &str, resolver: &dyn TaxonomyResolver) -> Result<RowOutcome> {
+    match genus_fallback(name) {
+        Some(candidate) if is_gtdb_placeholder(name) => {
+            Ok(match resolver.resolve(&candidate)? {
+                Resolution::Found(tax_id) => RowOutcome::Filled {
+                    tax_id,
+                    rename: Some(candidate),
+                },
+                // Say plainly that the name as written was never looked up.
+                Resolution::Problem(reason) => RowOutcome::Problem(format!(
+                    "'{name}' is a GTDB placeholder, not an ENA name; \
+                     genus fallback '{candidate}' failed: {reason}"
+                )),
+            })
+        }
+        candidate => Ok(match resolver.resolve(name)? {
+            Resolution::Found(tax_id) => RowOutcome::Filled {
+                tax_id,
+                rename: None,
+            },
+            Resolution::Problem(reason) => match candidate {
+                // The cell identifies a genus: retry the name ENA actually accepts.
+                Some(candidate) => match resolver.resolve(&candidate)? {
+                    Resolution::Found(tax_id) => RowOutcome::Filled {
+                        tax_id,
+                        rename: Some(candidate),
+                    },
+                    Resolution::Problem(second) => RowOutcome::Problem(format!(
+                        "{reason}; genus fallback '{candidate}' also failed: {second}"
+                    )),
+                },
+                None => RowOutcome::Problem(reason),
+            },
+        }),
+    }
+}
+
+/// Whether `name` is a GTDB placeholder binomial: a genus followed by a `sp<digits>` epithet.
+fn is_gtdb_placeholder(name: &str) -> bool {
+    let mut tokens = name.split_whitespace();
+    tokens.next().is_some_and(is_genus_token)
+        && tokens.next_back().is_some_and(is_gtdb_placeholder_epithet)
 }
 
 /// The submittable `"{genus} sp."` name to try when `name` itself names no submittable taxon.
@@ -175,12 +280,43 @@ fn write_table(path: &Path, table: &Table) -> Result<()> {
 /// Live resolver backed by the ENA taxonomy REST service.
 struct EnaTaxonomy {
     base: String,
+    /// Pooled connections. A sheet issues hundreds of lookups back-to-back against one host, and a
+    /// fresh agent per call would pay a TCP + TLS handshake for each (measured: ~0.7s of the ~1.1s
+    /// per request). The agent also carries the timeouts, which `ureq::get` alone does not set.
+    agent: ureq::Agent,
 }
 
 impl EnaTaxonomy {
     fn new() -> Self {
         Self {
             base: ENA_TAXONOMY_BASE.to_string(),
+            agent: ureq::AgentBuilder::new()
+                .timeout_connect(CONNECT_TIMEOUT)
+                .timeout_read(READ_TIMEOUT)
+                .build(),
+        }
+    }
+
+    /// GET `url` and decode the JSON array of taxa. A 404 (nothing matched) yields an empty list;
+    /// other non-2xx statuses and transport/decoding failures become [`Error::Network`].
+    fn fetch_taxa(&self, url: &str) -> Result<Vec<TaxonEntry>> {
+        match self.agent.get(url).call() {
+            Ok(resp) => resp
+                .into_json::<Vec<TaxonEntry>>()
+                .map_err(|e| Error::Network {
+                    url: url.to_string(),
+                    message: format!("could not decode taxonomy response: {e}"),
+                }),
+            // ENA answers with 404 and a plain-text body when a name matches nothing.
+            Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
+            Err(ureq::Error::Status(code, _)) => Err(Error::Network {
+                url: url.to_string(),
+                message: format!("HTTP {code}"),
+            }),
+            Err(e) => Err(Error::Network {
+                url: url.to_string(),
+                message: e.to_string(),
+            }),
         }
     }
 }
@@ -202,31 +338,8 @@ impl TaxonomyResolver for EnaTaxonomy {
             self.base,
             encode_path_segment(scientific_name)
         );
-        let entries = fetch_taxa(&url)?;
+        let entries = self.fetch_taxa(&url)?;
         Ok(classify(scientific_name, entries))
-    }
-}
-
-/// GET `url` and decode the JSON array of taxa. A 404 (nothing matched) yields an empty list;
-/// other non-2xx statuses and transport/decoding failures become [`Error::Network`].
-fn fetch_taxa(url: &str) -> Result<Vec<TaxonEntry>> {
-    match ureq::get(url).call() {
-        Ok(resp) => resp
-            .into_json::<Vec<TaxonEntry>>()
-            .map_err(|e| Error::Network {
-                url: url.to_string(),
-                message: format!("could not decode taxonomy response: {e}"),
-            }),
-        // ENA answers with 404 and a plain-text body when a name matches nothing.
-        Err(ureq::Error::Status(404, _)) => Ok(Vec::new()),
-        Err(ureq::Error::Status(code, _)) => Err(Error::Network {
-            url: url.to_string(),
-            message: format!("HTTP {code}"),
-        }),
-        Err(e) => Err(Error::Network {
-            url: url.to_string(),
-            message: e.to_string(),
-        }),
     }
 }
 
@@ -285,13 +398,23 @@ mod tests {
     use std::collections::HashMap;
     use std::path::PathBuf;
 
-    /// Resolver driven by a fixed name -> taxId map; unmapped names report a problem.
+    /// Resolver driven by a fixed name -> taxId map; unmapped names report a problem. Records every
+    /// name it is asked for, in order, so tests can assert which lookups were actually issued.
     struct FakeResolver {
         found: HashMap<&'static str, &'static str>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl FakeResolver {
+        /// The names looked up so far, in call order.
+        fn calls(&self) -> Vec<String> {
+            self.calls.borrow().clone()
+        }
     }
 
     impl TaxonomyResolver for FakeResolver {
         fn resolve(&self, name: &str) -> Result<Resolution> {
+            self.calls.borrow_mut().push(name.to_string());
             Ok(match self.found.get(name) {
                 Some(id) => Resolution::Found((*id).to_string()),
                 None => {
@@ -308,6 +431,7 @@ mod tests {
     fn resolver(pairs: &[(&'static str, &'static str)]) -> FakeResolver {
         FakeResolver {
             found: pairs.iter().copied().collect(),
+            calls: RefCell::new(Vec::new()),
         }
     }
 
@@ -396,6 +520,73 @@ mod tests {
         let err = fill_taxids(&t, &resolver(&[])).unwrap_err().to_string();
         assert!(!err.contains("genus fallback"), "got: {err}");
         assert!(err.contains("Phocaeicola vulgatus"), "got: {err}");
+    }
+
+    #[test]
+    fn gtdb_placeholder_skips_the_doomed_direct_lookup() {
+        // `sp<digits>` is a GTDB accession that ENA never matches, so only the fallback is issued.
+        let t = table("tax_id\tscientific_name\n\tPhocaeicola sp900556845\n");
+        let r = resolver(&[("Phocaeicola sp.", "310298")]);
+        fill_taxids(&t, &r).unwrap();
+        assert_eq!(r.calls(), ["Phocaeicola sp."]);
+    }
+
+    #[test]
+    fn bare_genus_still_tries_the_name_as_written_first() {
+        // A bare genus does resolve (to a non-submittable taxon), so the direct lookup is kept.
+        let t = table("tax_id\tscientific_name\n\tBacteroides\n");
+        let r = resolver(&[("Bacteroides sp.", "820")]);
+        fill_taxids(&t, &r).unwrap();
+        assert_eq!(r.calls(), ["Bacteroides", "Bacteroides sp."]);
+    }
+
+    #[test]
+    fn unresolvable_placeholder_says_it_was_never_looked_up_directly() {
+        let t = table("tax_id\tscientific_name\n\tNotagenus sp900556845\n");
+        let err = fill_taxids(&t, &resolver(&[])).unwrap_err().to_string();
+        assert!(err.contains("is a GTDB placeholder"), "got: {err}");
+        assert!(err.contains("'Notagenus sp.'"), "got: {err}");
+    }
+
+    #[test]
+    fn repeated_names_are_resolved_once() {
+        let t = table("tax_id\tscientific_name\n\tHomo sapiens\n\tHomo sapiens\n\tHomo sapiens\n");
+        let r = Memoized::new(resolver(&[("Homo sapiens", "9606")]));
+        let filled = fill_taxids(&t, &r).unwrap();
+
+        assert_eq!(r.inner.calls(), ["Homo sapiens"]);
+        // Every row is still filled, not just the one that missed the cache.
+        for row in &filled.rows {
+            assert_eq!(row[0], "9606");
+        }
+    }
+
+    #[test]
+    fn names_sharing_a_fallback_candidate_resolve_it_once() {
+        // Two distinct placeholders of the same genus collapse onto one `sp.` lookup.
+        let t = table(
+            "tax_id\tscientific_name\n\tPhocaeicola sp900556845\n\tPhocaeicola sp000432335\n",
+        );
+        let r = Memoized::new(resolver(&[("Phocaeicola sp.", "310298")]));
+        let filled = fill_taxids(&t, &r).unwrap();
+
+        assert_eq!(r.inner.calls(), ["Phocaeicola sp."]);
+        assert_eq!(filled.rows[0], ["310298", "Phocaeicola sp."]);
+        assert_eq!(filled.rows[1], ["310298", "Phocaeicola sp."]);
+    }
+
+    #[test]
+    fn a_cached_problem_is_reported_for_every_affected_row() {
+        // Caching must not swallow rows: the second row's problem is still aggregated.
+        let t = table(
+            "alias\ttax_id\tscientific_name\nbin.1\t\tNot A Species\nbin.2\t\tNot A Species\n",
+        );
+        let r = Memoized::new(resolver(&[]));
+        let err = fill_taxids(&t, &r).unwrap_err().to_string();
+
+        assert_eq!(r.inner.calls(), ["Not A Species"]);
+        assert!(err.contains("row 1"), "got: {err}");
+        assert!(err.contains("row 2"), "got: {err}");
     }
 
     #[test]

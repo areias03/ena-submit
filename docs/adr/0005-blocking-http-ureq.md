@@ -31,5 +31,13 @@ small and, via rustls + bundled webpki roots, needs no system OpenSSL.
 - TLS works out of the box with no system crypto library, easing portability.
 - Requests are issued **sequentially**, one per row. Acceptable for the small MAG sample sheets in
   scope; if a future feature needs high-volume concurrent requests, revisit the client choice.
+  **Update (2026-07-27):** a real sheet turned out to be 2676 rows, and the `"{genus} sp."` fallback
+  added a second request per falling-back row — 4282 sequential requests, ~80 min. Rather than
+  revisit this decision, `mag prepare` now **memoizes lookups by name**, which cut a full sheet to
+  268 requests (2676 rows hold only ~280 distinct names). Sequential blocking I/O is comfortably
+  fast at that volume — and gentler on EBI's public API than concurrency would be — so this ADR
+  stands. `EnaTaxonomy` now holds a shared `ureq::Agent` so those requests reuse one pooled
+  connection (measured ~0.7 s of handshake saved per request) and carry connect/read timeouts,
+  which the previous per-call `ureq::get` did not set.
 - Sets the precedent that ENA REST calls are blocking; the submission path shells out to Webin-CLI
   ([ADR 0002](0002-wrap-webin-cli-hybrid.md)) rather than making HTTP calls itself.

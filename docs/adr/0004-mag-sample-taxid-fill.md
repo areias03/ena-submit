@@ -60,6 +60,11 @@ to the "only `tax_id` is written" decision above: ENA validates the name against
 sheet carrying `Bacteroides` beside the `Bacteroides sp.` taxId would be rejected downstream. The
 rewrite count is reported on stdout.
 
-The retry costs a second request for every falling-back row, and the sequential-request assumption
-in [ADR 0005](0005-blocking-http-ureq.md) is now the dominant cost on a full sheet (4282 requests
-for 2676 rows, ~80 min). Reducing that is tracked separately.
+The retry costs a second request for every falling-back row, which made the request count the
+dominant cost on a full sheet (4282 requests, ~80 min). This is now solved by memoizing lookups by
+name — see the update in [ADR 0005](0005-blocking-http-ureq.md); a full sheet issues 268 requests
+and completes in ~77 s. A GTDB placeholder also skips the direct lookup entirely, since a
+`sp<digits>` epithet provably matches nothing in ENA (verified: the endpoint returns an empty list);
+its error message says so rather than implying an attempt that never happened. A bare genus keeps
+the direct-first order, because it *does* resolve — to a non-submittable taxon — and that is
+information worth having.

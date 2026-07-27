@@ -75,6 +75,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   submission path and MAG chromosome wiring have landed.
 
 ### Changed
+- `mag prepare` is dramatically faster on real sheets: the reference 2676-row sheet went from an
+  estimated ~80 minutes and 4282 requests to **~77 seconds and 268 requests**, with byte-identical
+  output. Three changes, none of which required revisiting ADR 0005's sequential-blocking decision:
+  taxonomy lookups are **memoized by name** (2676 rows hold only ~280 distinct names, and the
+  `"<genus> sp."` fallback collapses them further); `EnaTaxonomy` holds a shared `ureq::Agent` so
+  requests **reuse one pooled connection** instead of paying a TLS handshake each (~0.7 s per
+  request) and now carry connect/read timeouts, which were previously absent entirely; and a GTDB
+  placeholder **skips the direct lookup**, since a `sp<digits>` epithet provably matches nothing in
+  ENA — its error message now says the name was never looked up as written, rather than implying an
+  attempt that never happened. A bare genus keeps the direct-first order. The run logs how many
+  lookups actually reached ENA. 6 new unit tests using a call-recording fake resolver.
 - `mag prepare` now falls back to `"<genus> sp."` for the two GTDB-derived name shapes ENA cannot
   accept as written: a bare genus (`Bacteroides`, which ENA holds but flags non-submittable) and a
   placeholder binomial whose epithet is a GTDB accession (`Phocaeicola sp900556845`). Both used to
