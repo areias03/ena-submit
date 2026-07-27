@@ -75,6 +75,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   submission path and MAG chromosome wiring have landed.
 
 ### Changed
+- `mag prepare` now falls back to `"<genus> sp."` for the two GTDB-derived name shapes ENA cannot
+  accept as written: a bare genus (`Bacteroides`, which ENA holds but flags non-submittable) and a
+  placeholder binomial whose epithet is a GTDB accession (`Phocaeicola sp900556845`). Both used to
+  fail the whole run, and together they are the majority of a real sheet. The retry happens only
+  after the direct lookup fails, so accepted names are never second-guessed; taking the genus from
+  the first token also handles GTDB's spaced genus suffixes (`Clostridium AQ sp000165065` →
+  `Clostridium sp.`). On success both `tax_id` and the `scientific_name` cell are written — ENA
+  validates the name against the taxon id — making this the one case where `mag prepare` edits
+  another column; the rewrite count is reported. Real binomials are untouched. 7 new unit tests;
+  ADR 0004 updated.
 - MAG sample handling: `mag prepare` now **completes a user-provided sample sheet** by filling the
   `tax_id` column (resolved from `scientific_name` via the ENA taxonomy API) instead of generating
   the sheet from bin metadata. Recorded in ADR 0004, superseding the MAG-sample half of ADR 0003.

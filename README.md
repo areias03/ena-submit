@@ -16,7 +16,8 @@ All planned commands are implemented:
 - `init` — scaffold `ena-submit.toml` and template input TSVs.
 - Typed, fully-validated TSV input for reads, assemblies, and MAG bins.
 - `mag prepare` — complete a MAG sample sheet by resolving each row's `scientific_name` to a
-  `tax_id` via the ENA taxonomy API.
+  `tax_id` via the ENA taxonomy API, falling back to `"<genus> sp."` for genus-only names and GTDB
+  placeholders.
 - `reads` / `assembly` / `mag submit` — render manifests and drive Webin-CLI to validate or submit,
   parsing the receipt for accessions. `mag submit` submits single-contig bins as chromosomes.
 - `status` — render the local append-only submission history (`.ena-submit/history.jsonl`).
@@ -58,6 +59,19 @@ unfilled template fails loudly instead of reporting a run with nothing to do as 
 
 1. `mag prepare <mags.tsv> -o mag_samples.filled.tsv` — fills the `tax_id` column from
    `scientific_name`; all other checklist columns pass through unchanged.
+
+   Two common name shapes cannot be submitted as written, and are retried as `"<genus> sp."`:
+
+   | `scientific_name` in the sheet | why it fails | retried as |
+   | --- | --- | --- |
+   | `Bacteroides` | ENA has the genus but marks it *not submittable* | `Bacteroides sp.` |
+   | `Phocaeicola sp900556845` | GTDB accessioned epithet; ENA has no such name | `Phocaeicola sp.` |
+
+   The retry happens only after the name as written fails, so a name ENA does accept is never
+   second-guessed. When the retry succeeds the `scientific_name` cell is rewritten to the resolved
+   name — ENA validates `scientific_name` against `tax_id`, so the two have to agree. This is the
+   only case where `mag prepare` edits a column other than `tax_id`, and it reports how many cells
+   it rewrote. Real binomials (`Phocaeicola vulgatus`) are never rewritten.
 2. Upload the completed sheet via the Webin spreadsheet UI to obtain `ERS…` sample accessions, and
    save a `bin_name → ERS…` mapping (`registered_mags.tsv`).
 3. `mag submit <mags.tsv> --samples registered_mags.tsv` — submits each MAG assembly.

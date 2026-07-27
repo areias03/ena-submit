@@ -3,8 +3,11 @@
 //! The sheet is read with the generic [`Table`] reader so every checklist column is preserved in
 //! order. For each row we resolve the `scientific_name` cell to an NCBI/ENA taxon id via the ENA
 //! taxonomy REST API and write it into the `tax_id` cell; all other cells pass through untouched.
-//! Cells that already carry a `tax_id` are left as-is (idempotent re-runs). Rows whose name is
-//! unknown, ambiguous, or not submittable are collected and reported together as one error.
+//! Cells that already carry a `tax_id` are left as-is (idempotent re-runs). A name ENA cannot
+//! resolve but that identifies a genus — a bare `Bacteroides`, or a GTDB placeholder such as
+//! `Phocaeicola sp900556845` — is retried as `{genus} sp.`, the form ENA accepts for submission,
+//! and the `scientific_name` cell is rewritten to match. Rows whose name is unknown, ambiguous, or
+//! not submittable are collected and reported together as one error.
 
 use std::path::Path;
 
@@ -45,7 +48,8 @@ trait TaxonomyResolver {
 ///
 /// Returns a new [`Table`] with the same headers/order. Row-level problems (empty or unresolvable
 /// names) are collected and returned as a single [`Error::Input`]; a hard resolver failure aborts
-/// immediately.
+/// immediately. A name that does not resolve but identifies a genus is retried as `"{genus} sp."`
+/// (see [`genus_fallback`]); on success both `tax_id` and the `scientific_name` cell are written.
 fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> {
     let sci_col = require_column(table, "scientific_name")?;
     let tax_col = require_column(table, "tax_id")?;
@@ -54,6 +58,7 @@ fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> 
     let mut problems = Vec::new();
     let mut filled = 0usize;
     let mut kept = 0usize;
+    let mut fallbacks = 0usize;
 
     for (i, row) in rows.iter_mut().enumerate() {
         let number = i + 1;
@@ -72,7 +77,23 @@ fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> 
                 row[tax_col] = tax_id;
                 filled += 1;
             }
-            Resolution::Problem(reason) => problems.push(format!("row {number}: {reason}")),
+            Resolution::Problem(reason) => match genus_fallback(&name) {
+                // The cell identifies a genus: retry the name ENA actually accepts.
+                Some(candidate) => match resolver.resolve(&candidate)? {
+                    Resolution::Found(tax_id) => {
+                        row[tax_col] = tax_id;
+                        // ENA checks scientific_name against tax_id, so the cell must follow.
+                        row[sci_col] = candidate;
+                        filled += 1;
+                        fallbacks += 1;
+                        tracing::info!(row = number, from = %name, "genus fallback applied");
+                    }
+                    Resolution::Problem(second) => problems.push(format!(
+                        "row {number}: {reason}; genus fallback '{candidate}' also failed: {second}"
+                    )),
+                },
+                None => problems.push(format!("row {number}: {reason}")),
+            },
         }
     }
 
@@ -82,12 +103,51 @@ fn fill_taxids(table: &Table, resolver: &dyn TaxonomyResolver) -> Result<Table> 
             message: problems.join("\n"),
         });
     }
-    tracing::info!(filled, kept, "tax_id resolution complete");
+    tracing::info!(filled, kept, fallbacks, "tax_id resolution complete");
+    if fallbacks > 0 {
+        println!("Rewrote {fallbacks} scientific_name cell(s) to the \"<genus> sp.\" form");
+    }
     Ok(Table {
         path: table.path.clone(),
         headers: table.headers.clone(),
         rows,
     })
+}
+
+/// The submittable `"{genus} sp."` name to try when `name` itself names no submittable taxon.
+///
+/// Two shapes qualify, both resolving to the genus in the first token:
+/// - a bare genus — `Bacteroides` → `Bacteroides sp.`;
+/// - a GTDB placeholder binomial, whose last token is `sp` followed by digits — `Phocaeicola
+///   sp900556845` → `Phocaeicola sp.`, `Clostridium AQ sp000165065` → `Clostridium sp.`. These
+///   accessioned epithets exist only in GTDB, so ENA can never match them as written.
+///
+/// Anything else — a real binomial (`Homo sapiens`), an already-suffixed name (`Bacteroides sp.`) —
+/// yields `None` and is reported as before.
+fn genus_fallback(name: &str) -> Option<String> {
+    let mut tokens = name.split_whitespace();
+    let genus = tokens.next().filter(|t| is_genus_token(t))?;
+    match tokens.next_back() {
+        // A bare genus.
+        None => Some(format!("{genus} sp.")),
+        // A GTDB placeholder: strip the accessioned epithet (and any GTDB genus suffix between).
+        Some(last) if is_gtdb_placeholder_epithet(last) => Some(format!("{genus} sp.")),
+        Some(_) => None,
+    }
+}
+
+/// Whether `token` looks like a genus name: at least two ASCII letters, initial capital.
+fn is_genus_token(token: &str) -> bool {
+    token.len() >= 2
+        && token.starts_with(|c: char| c.is_ascii_uppercase())
+        && token.chars().all(|c| c.is_ascii_alphabetic())
+}
+
+/// Whether `token` is a GTDB accessioned epithet: `sp` followed by digits (`sp900556845`).
+fn is_gtdb_placeholder_epithet(token: &str) -> bool {
+    token
+        .strip_prefix("sp")
+        .is_some_and(|digits| !digits.is_empty() && digits.chars().all(|c| c.is_ascii_digit()))
 }
 
 /// Locate a required column index, or an [`Error::Input`] naming the missing column.
@@ -293,6 +353,86 @@ mod tests {
         assert!(err.contains("scientific_name is empty"), "got: {err}");
         // Row 1 resolved fine, so it must not appear.
         assert!(!err.contains("row 1"), "got: {err}");
+    }
+
+    #[test]
+    fn genus_only_name_falls_back_to_sp() {
+        // Only the `sp.` form is known, mirroring ENA: the bare genus is not submittable.
+        let t = table("tax_id\tscientific_name\n\tBacteroides\n");
+        let r = resolver(&[("Bacteroides sp.", "820")]);
+        let filled = fill_taxids(&t, &r).unwrap();
+        assert_eq!(filled.rows[0], ["820", "Bacteroides sp."]);
+    }
+
+    #[test]
+    fn direct_hit_wins_over_fallback() {
+        let t = table("tax_id\tscientific_name\n\tBacteroides\n");
+        let r = resolver(&[("Bacteroides", "816"), ("Bacteroides sp.", "820")]);
+        let filled = fill_taxids(&t, &r).unwrap();
+        assert_eq!(filled.rows[0], ["816", "Bacteroides"]);
+    }
+
+    #[test]
+    fn gtdb_placeholder_falls_back_to_genus_sp() {
+        // `sp900556845` is a GTDB accession, unknown to ENA; the genus is the usable part.
+        let t = table("tax_id\tscientific_name\n\tPhocaeicola sp900556845\n");
+        let r = resolver(&[("Phocaeicola sp.", "310298")]);
+        let filled = fill_taxids(&t, &r).unwrap();
+        assert_eq!(filled.rows[0], ["310298", "Phocaeicola sp."]);
+    }
+
+    #[test]
+    fn gtdb_placeholder_with_genus_suffix_falls_back_to_the_first_token() {
+        // GTDB's `Clostridium AQ sp000165065`: the suffix goes with the epithet.
+        let t = table("tax_id\tscientific_name\n\tClostridium AQ sp000165065\n");
+        let r = resolver(&[("Clostridium sp.", "1506")]);
+        let filled = fill_taxids(&t, &r).unwrap();
+        assert_eq!(filled.rows[0], ["1506", "Clostridium sp."]);
+    }
+
+    #[test]
+    fn genus_fallback_not_tried_for_real_binomials() {
+        let t = table("tax_id\tscientific_name\n\tPhocaeicola vulgatus\n");
+        let err = fill_taxids(&t, &resolver(&[])).unwrap_err().to_string();
+        assert!(!err.contains("genus fallback"), "got: {err}");
+        assert!(err.contains("Phocaeicola vulgatus"), "got: {err}");
+    }
+
+    #[test]
+    fn genus_fallback_failure_reports_both_attempts() {
+        let t = table("tax_id\tscientific_name\n\tNotagenus\n");
+        let err = fill_taxids(&t, &resolver(&[])).unwrap_err().to_string();
+        assert!(err.contains("'Notagenus'"), "got: {err}");
+        assert!(err.contains("genus fallback 'Notagenus sp.'"), "got: {err}");
+    }
+
+    #[test]
+    fn genus_fallback_recognises_bare_genera_and_gtdb_placeholders() {
+        for (name, want) in [
+            ("Bacteroides", "Bacteroides sp."),
+            ("Phocaeicola sp900556845", "Phocaeicola sp."),
+            ("Clostridium AQ sp000165065", "Clostridium sp."),
+            ("Phocaeicola sp1", "Phocaeicola sp."),
+        ] {
+            assert_eq!(genus_fallback(name).as_deref(), Some(want), "for {name:?}");
+        }
+        for name in [
+            "Homo sapiens",
+            // `sp` with no digits is a real epithet fragment, not a GTDB accession.
+            "Phocaeicola sp",
+            "Clostridium AQ innocuum",
+            "sp900556845",
+            "bacteroides",
+            "B",
+            "",
+            "Bacteroides sp.",
+        ] {
+            assert_eq!(
+                genus_fallback(name),
+                None,
+                "expected no fallback for {name:?}"
+            );
+        }
     }
 
     #[test]

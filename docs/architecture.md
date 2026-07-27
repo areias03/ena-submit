@@ -18,7 +18,9 @@ runtime; every other path (including `mag prepare`) runs without them.
 - Parse and validate TSV input (one row per run / assembly / MAG bin).
 - Generate Webin-CLI **manifest** files (`reads` and `genome` contexts).
 - Complete the user's **MAG sample sheet** by filling its `tax_id` column (resolved from
-  `scientific_name` via the ENA taxonomy API); all other columns pass through unchanged.
+  `scientific_name` via the ENA taxonomy API); all other columns pass through unchanged, except a
+  `scientific_name` that only identifies a genus (a bare genus, or a GTDB placeholder such as
+  `Phocaeicola sp900556845`), which is rewritten to the `"<genus> sp."` form ENA accepts.
 - Invoke Webin-CLI with the right flags and parse the receipt XML for accessions.
 - Record an auditable local submission history.
 
@@ -61,7 +63,8 @@ ena-submit status
 ## MAG submission flow
 
 1. `mag prepare` — user's near-complete sample sheet → same sheet with `tax_id` filled from
-   `scientific_name` (ENA taxonomy API).
+   `scientific_name` (ENA taxonomy API); genus-only names and GTDB placeholders are retried and
+   rewritten as `"<genus> sp."`.
 2. User uploads the completed sheet via the Webin spreadsheet UI → obtains `ERS…` accessions →
    saves `registered_mags.tsv` (`bin_name → ERS…`).
 3. `mag submit` — per bin: genome manifest with `ASSEMBLY_TYPE="Metagenome-Assembled Genome (MAG)"`
