@@ -75,6 +75,13 @@ family, and it is what rescues the GTDB-only genera. The domain is never tried â
 bacterium` names nothing. A GTDB placeholder species (`sp<digits>`) is skipped rather than tried, as
 in ADR 0004: it provably matches nothing.
 
+The two triggers are not equally benign, so they are not reported alike. A `0` cell is expected â€”
+GTDB-Tk matched nothing, and there was never an accession to use. An accession NCBI cannot resolve
+means the *sheet* is stale, pointing at an assembly that no longer exists, and is worth refreshing
+from a newer GTDB release. The run still completes either way, but the latter emits a `WARN` naming
+the accession and how many rows it affects (once per accession, not per row) rather than passing
+silently.
+
 `GTDBtk fastani Ref` joins `scientific_name` and `tax_id` as a required **column**; an empty or `0`
 **cell** is normal and simply routes the row to the fallback.
 

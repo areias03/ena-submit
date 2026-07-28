@@ -17,7 +17,7 @@
 //! resolves, are collected and reported together as one error.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::time::Duration;
 
@@ -167,6 +167,16 @@ fn fill_taxids(
         resolved = species.len(),
         "reference accessions mapped to NCBI species taxa"
     );
+    // A cell holding a real accession NCBI cannot resolve is a stale reference — the assembly was
+    // suppressed or replaced — not the "GTDB-Tk matched nothing" case that `0` marks. Both fall
+    // back to the classification, but only this one points at a sheet that needs refreshing.
+    for (accession, rows) in unresolved_accessions(&pending, ref_col, &species) {
+        tracing::warn!(
+            accession,
+            rows,
+            "reference accession not found in NCBI; falling back to the classification"
+        );
+    }
 
     let mut problems = Vec::new();
     let mut filled = 0usize;
@@ -244,6 +254,27 @@ fn fill_taxids(
         headers: table.headers.clone(),
         rows,
     })
+}
+
+/// The accessions `pending` asks for that NCBI could not resolve, mapped to how many rows each
+/// affects.
+///
+/// Reported per accession rather than per row: the accession is the thing to fix, and one stale
+/// reference typically covers many bins. `BTreeMap` keeps the warnings in a stable order.
+fn unresolved_accessions<'a>(
+    pending: &[&'a Vec<String>],
+    ref_col: usize,
+    species: &HashMap<String, String>,
+) -> BTreeMap<&'a str, usize> {
+    let mut missing = BTreeMap::new();
+    for row in pending {
+        if let Some(accession) = reference_accession(&row[ref_col])
+            && !species.contains_key(accession)
+        {
+            *missing.entry(accession).or_default() += 1;
+        }
+    }
+    missing
 }
 
 /// The usable reference accession in a [`REFERENCE_COLUMN`] cell, or `None` when GTDB-Tk recorded
@@ -952,6 +983,45 @@ mod tests {
         );
         // The domain is never tried: "Bacteria bacterium" names nothing.
         assert!(chain("d__Bacteria;g__;s__").is_empty());
+    }
+
+    #[test]
+    fn stale_accessions_are_counted_per_accession_for_reporting() {
+        // Rows 1-2 share one suppressed assembly, row 3 has another, row 4 resolves fine, and
+        // row 5 was never matched to a reference at all.
+        let c = cell("Phocaeicola", "Phocaeicola vulgatus");
+        let t = sheet(&[
+            ("", &c, "GCA_gone.1"),
+            ("", &c, "GCA_gone.1"),
+            ("", &c, "GCA_also_gone.1"),
+            ("", &c, "GCF_here.1"),
+            ("", &c, "0"),
+        ]);
+        let species: HashMap<String, String> =
+            [("GCF_here.1".to_string(), "821".to_string())].into();
+        let pending: Vec<&Vec<String>> = t.rows.iter().collect();
+
+        let missing = unresolved_accessions(&pending, 2, &species);
+        assert_eq!(
+            missing,
+            [("GCA_also_gone.1", 1), ("GCA_gone.1", 2)].into(),
+            "only accessions NCBI could not resolve, counted by row"
+        );
+    }
+
+    #[test]
+    fn rows_that_already_have_a_tax_id_are_not_warned_about() {
+        // `pending` excludes them, so a stale accession beside a filled tax_id is nobody's problem.
+        let c = cell("Phocaeicola", "Phocaeicola vulgatus");
+        let t = sheet(&[("821", &c, "GCA_gone.1"), ("", &c, "GCA_gone.1")]);
+        let pending: Vec<&Vec<String>> = t
+            .rows
+            .iter()
+            .filter(|row| row[0].trim().is_empty())
+            .collect();
+
+        let missing = unresolved_accessions(&pending, 2, &HashMap::new());
+        assert_eq!(missing, [("GCA_gone.1", 1)].into());
     }
 
     #[test]
