@@ -1,6 +1,10 @@
 # 4. MAG samples: complete the user's sheet by filling `tax_id`
 
-- Status: accepted
+- Status: accepted; **name resolution superseded by
+  [ADR 0008](0008-mag-taxid-from-reference-accession.md)**, which resolves the taxon id from the
+  row's GTDB-Tk reference genome accession instead. The decisions below about *completing* the
+  user's sheet still hold; the name-matching described here now survives only as ADR 0008's
+  fallback for rows GTDB-Tk matched no reference for.
 - Date: 2026-07-23
 - Supersedes the MAG-sample half of [ADR 0003](0003-tsv-input-and-mag-tsv-only.md)
 
@@ -68,3 +72,42 @@ and completes in ~77 s. A GTDB placeholder also skips the direct lookup entirely
 its error message says so rather than implying an attempt that never happened. A bare genus keeps
 the direct-first order, because it *does* resolve — to a non-submittable taxon — and that is
 information worth having.
+
+## Update (2026-07-28): the sheet carries GTDB-Tk classifications
+
+The `scientific_name` column now holds the **GTDB-Tk classification string verbatim** —
+`d__Bacteria;…;g__Phocaeicola;s__Phocaeicola vulgatus` — rather than a name someone reduced by
+hand beforehand. That reduction was the one manual step left in front of `mag prepare`, and it is
+exactly the step the previous update's fallback logic was already half-doing; folding it in makes
+the tool consume GTDB-Tk's output directly.
+
+A new `gtdb` module parses a classification into the deepest rank that names a taxon: the species
+if GTDB assigned one, otherwise the genus. Everything downstream is unchanged — the parsed name
+goes through the same direct-lookup / `"{genus} sp."` retry described above.
+
+Two details the parser has to get right:
+
+- **Polyphyly suffixes are stripped.** GTDB writes `Clostridium_AQ`, `Bacteroides fragilis_A`,
+  `Anaerobiospirillum_A thomasii`; the suffix marks a GTDB split of a name NCBI keeps whole, and
+  appears in no ENA record. The previous update handled the *spaced* form (`Clostridium AQ
+  sp000165065`) because the hand-reduced sheets had substituted spaces for the underscores; raw
+  GTDB output has the underscore, which `is_genus_token`'s all-ASCII-letters check would reject
+  outright. Stripping is per whitespace token, since the suffix sits on either half of a binomial.
+- **A genus-only lineage skips the direct lookup.** When `s__` is empty the rank is *known* from
+  the lineage, so the bare-genus direct-first order no longer buys information — the genus is a
+  real but non-submittable taxon, and the fallback is the only outcome. This is the same
+  doomed-request reasoning that already applies to `sp<digits>` placeholders. A single-token
+  species field still takes the direct-first path.
+
+Consequences:
+
+- **`scientific_name` is now rewritten on nearly every row**, not just fallback rows, since a
+  classification string is never a valid ENA name. The "only `tax_id` is written" rule from the
+  original decision is fully retired; the command reports the rewrite count and how many went via
+  the `"<genus> sp."` form.
+- **A plain scientific name is no longer accepted as input** — it is reported per row as "not a
+  GTDB classification". Re-running on an output sheet is still a no-op, because those rows carry a
+  `tax_id` and are skipped before the cell is ever parsed.
+- A lineage empty at both `g__` and `s__` (4 rows of the 2676-row reference sheet) is a row-level
+  problem naming its deepest populated rank, so it can be fixed by hand. As with every other row
+  problem, one such row fails the whole run.

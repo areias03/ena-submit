@@ -75,6 +75,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   submission path and MAG chromosome wiring have landed.
 
 ### Changed
+- `mag prepare` now resolves each row from its **GTDB-Tk reference genome accession**
+  (`GTDBtk fastani Ref`) rather than by matching GTDB names against ENA. Name matching failed on
+  **507 of the reference sheet's 2676 rows (19%)** — GTDB's placeholder genera (`CAG-269`,
+  `UBA9414`) exist in no ENA record, and GTDB names that ENA has renamed (`Prevotella copri` →
+  *Segatella copri*, `Ruminococcus gnavus` → *Mediterraneibacter*) match nothing — and since row
+  problems are aggregated, the sheet could not be prepared at all. The accession is mapped to an
+  NCBI species taxon id through the new `ncbi` module (batched NCBI Datasets POSTs: ~5 requests for
+  a whole sheet), then confirmed against ENA by an exact `tax-id/{id}` lookup that cannot be
+  ambiguous. Reference genomes that are themselves strains — 54 of 172 distinct taxa, since `GCF_`
+  accessions are the majority — are climbed to their species, so a MAG is never submitted as the
+  type strain it resembles. Rows GTDB-Tk matched no reference for (it writes `0`; 470 rows) fall
+  back to ENA name lookups walking down the lineage: species, `"<genus> sp."`,
+  `"uncultured <genus> sp."`, `"<family> bacterium"`, then order, class and phylum. **The full
+  sheet now resolves: 2676/2676 rows, every one submittable in ENA.** `GTDBtk fastani Ref` becomes
+  a required column and `init`'s template carries it. The GTDB API was evaluated and rejected: it
+  serves a Cloudflare Origin certificate chained to no public root, so no correctly configured
+  client can reach it. 21 new unit tests plus 1 CLI test; ADR 0008 added, ADR 0004 superseded in
+  part.
+- `mag prepare` now reads **GTDB-Tk classification strings** from `scientific_name`
+  (`d__Bacteria;…;g__Phocaeicola;s__Phocaeicola vulgatus`) instead of a hand-reduced scientific
+  name, folding the last manual step in front of the command into the tool. A new `gtdb` module
+  reduces each lineage to the deepest rank that names a taxon — the species, or the genus where
+  GTDB assigned none — after stripping GTDB's polyphyly suffixes (`Clostridium_AQ` →
+  `Clostridium`, `Bacteroides fragilis_A` → `Bacteroides fragilis`), which appear in no ENA
+  record. The reduced name feeds the existing lookup and `"<genus> sp."` retry unchanged; a
+  genus-only lineage now goes straight to `"<genus> sp."`, since the rank is known from the lineage
+  and a bare genus is never submittable. `scientific_name` is consequently rewritten on nearly
+  every row rather than only on fallback rows, and the run reports both counts. A cell that is not
+  a classification, or a lineage empty at both `g__` and `s__`, is reported with its row number
+  alongside the other row problems. Rows that already carry a `tax_id` are still skipped, so
+  re-running on an output sheet remains a no-op. 9 new unit tests plus 1 CLI test; ADR 0004 updated.
 - `mag prepare` is dramatically faster on real sheets: the reference 2676-row sheet went from an
   estimated ~80 minutes and 4282 requests to **~77 seconds and 268 requests**, with byte-identical
   output. Three changes, none of which required revisiting ADR 0005's sequential-blocking decision:

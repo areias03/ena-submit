@@ -15,9 +15,9 @@ All planned commands are implemented:
 
 - `init` — scaffold `ena-submit.toml` and template input TSVs.
 - Typed, fully-validated TSV input for reads, assemblies, and MAG bins.
-- `mag prepare` — complete a MAG sample sheet by resolving each row's `scientific_name` to a
-  `tax_id` via the ENA taxonomy API, falling back to `"<genus> sp."` for genus-only names and GTDB
-  placeholders.
+- `mag prepare` — complete a MAG sample sheet by resolving each row's GTDB-Tk reference genome
+  accession to a `tax_id` (NCBI Datasets → ENA) and rewriting `scientific_name` to the matching ENA
+  name, falling back to a walk up the GTDB lineage for rows GTDB-Tk matched no reference for.
 - `reads` / `assembly` / `mag submit` — render manifests and drive Webin-CLI to validate or submit,
   parsing the receipt for accessions. `mag submit` submits single-contig bins as chromosomes.
 - `status` — render the local append-only submission history (`.ena-submit/history.jsonl`).
@@ -57,21 +57,48 @@ unfilled template fails loudly instead of reporting a run with nothing to do as 
 
 ### MAG workflow
 
-1. `mag prepare <mags.tsv> -o mag_samples.filled.tsv` — fills the `tax_id` column from
+1. `mag prepare <mags.tsv> -o mag_samples.filled.tsv` — fills the `tax_id` column and rewrites
    `scientific_name`; all other checklist columns pass through unchanged.
 
-   Two common name shapes cannot be submitted as written, and are retried as `"<genus> sp."`:
+   Two columns are copied straight out of GTDB-Tk's summary and drive the whole step:
 
-   | `scientific_name` in the sheet | why it fails | retried as |
+   | column | GTDB-Tk field | example |
    | --- | --- | --- |
-   | `Bacteroides` | ENA has the genus but marks it *not submittable* | `Bacteroides sp.` |
-   | `Phocaeicola sp900556845` | GTDB accessioned epithet; ENA has no such name | `Phocaeicola sp.` |
+   | `scientific_name` | `classification` | `d__Bacteria;…;g__Phocaeicola;s__Phocaeicola vulgatus` |
+   | `GTDBtk fastani Ref` | `fastani_reference` | `GCF_000012825.1` |
 
-   The retry happens only after the name as written fails, so a name ENA does accept is never
-   second-guessed. When the retry succeeds the `scientific_name` cell is rewritten to the resolved
-   name — ENA validates `scientific_name` against `tax_id`, so the two have to agree. This is the
-   only case where `mag prepare` edits a column other than `tax_id`, and it reports how many cells
-   it rewrote. Real binomials (`Phocaeicola vulgatus`) are never rewritten.
+   The **accession is the key**. `mag prepare` maps it to an NCBI species taxon id (NCBI Datasets
+   API), confirms that id against ENA, and writes both the `tax_id` and ENA's own name for it —
+   ENA validates `scientific_name` against `tax_id`, so the two have to agree. Matching GTDB's
+   *names* against ENA instead fails on roughly a fifth of a real sheet, because many exist only in
+   GTDB (`CAG-269`, `UBA9414`) or have since been renamed (`Prevotella copri` → *Segatella copri*).
+
+   | `GTDBtk fastani Ref` | GTDB calls it | ENA name written |
+   | --- | --- | --- |
+   | `GCF_000012825.1` | `Phocaeicola vulgatus` | `Phocaeicola vulgatus` (821) |
+   | `GCF_002224675.1` | `Prevotella copri_A` | `Segatella copri` (165179) |
+   | `GCA_900553985.1` | `CAG-269 sp900553985` | `uncultured Clostridium sp.` (59620) |
+   | `GCA_018365895.1` | `UBA9414 sp018365895` | `Lachnospiraceae bacterium` (1898203) |
+
+   A reference genome that is itself a *strain* (common for `GCF_` records) is climbed to its
+   species first: a MAG is not the type strain it happens to resemble.
+
+   **Rows with no usable accession** — GTDB-Tk writes `0` when it made no species assignment —
+   fall back to looking names up in ENA, walking the lineage down until one resolves: the species,
+   then `"<genus> sp."`, then `"uncultured <genus> sp."`, then `"<family> bacterium"` and on up
+   through order, class and phylum. GTDB's polyphyly suffixes (`_A`, `_AQ`) are stripped for these
+   name lookups, since they exist nowhere in ENA.
+
+   | classification | resolved by name to |
+   | --- | --- |
+   | `g__Rothia;s__` | `uncultured Rothia sp.` |
+   | `g__Merdisoma;s__` (GTDB-only genus) | `Lachnospiraceae bacterium` |
+   | `f__Eggerthellaceae;g__;s__` | `Eggerthellaceae bacterium` |
+
+   `mag prepare` reports how many cells it rewrote and how many took the fallback. A row whose cell
+   is not a classification, or that nothing resolves, is reported with its row number; all such rows
+   are collected and reported together. Rows that already carry a `tax_id` are left untouched, so
+   re-running on an output sheet is a no-op.
 2. Upload the completed sheet via the Webin spreadsheet UI to obtain `ERS…` sample accessions, and
    save a `bin_name → ERS…` mapping (`registered_mags.tsv`).
 3. `mag submit <mags.tsv> --samples registered_mags.tsv` — submits each MAG assembly.

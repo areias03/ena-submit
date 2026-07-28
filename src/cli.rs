@@ -491,11 +491,13 @@ assemblyname\tstudy\tsample\tassembly_type\tcoverage\tprogram\tplatform\tmolecul
 asm_isolate1\tPRJEB00000\tERS0000000\tclone or isolate\t30\tSPAdes\tILLUMINA\tgenomic DNA\t100\tExample isolate assembly\tERR0000000\tassembly.fasta.gz
 ";
 
-// Example MAG *sample sheet*: you fill everything except `tax_id`; `ena-submit mag prepare`
-// resolves `tax_id` from `scientific_name`. Extra checklist columns are passed through unchanged.
+// Example MAG *sample sheet*: you fill everything except `tax_id`, pasting GTDB-Tk's own
+// `classification` and `fastani_reference` values into `scientific_name` and `GTDBtk fastani Ref`.
+// `ena-submit mag prepare` fills `tax_id` and rewrites `scientific_name` to the matching ENA name.
+// Extra checklist columns are passed through unchanged.
 const MAG_SAMPLES_TEMPLATE: &str = "\
-sample_alias\ttax_id\tscientific_name\tsample derived from\tenvironment (biome)\tcompleteness score\tcontamination score
-bin.1\t\tuncultured Bacteroides sp.\tERS1111111\thuman gut\t95.5\t2.1
+sample_alias\ttax_id\tscientific_name\tGTDBtk fastani Ref\tsample derived from\tenvironment (biome)\tcompleteness score\tcontamination score
+bin.1\t\td__Bacteria;p__Bacteroidota;c__Bacteroidia;o__Bacteroidales;f__Bacteroidaceae;g__Phocaeicola;s__Phocaeicola vulgatus\tGCF_000012825.1\tERS1111111\thuman gut\t95.5\t2.1
 ";
 
 // Assembly parameters for `ena-submit mag submit`. `sample` is filled from registered_mags.tsv and

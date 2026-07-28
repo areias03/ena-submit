@@ -17,10 +17,11 @@ runtime; every other path (including `mag prepare`) runs without them.
 
 - Parse and validate TSV input (one row per run / assembly / MAG bin).
 - Generate Webin-CLI **manifest** files (`reads` and `genome` contexts).
-- Complete the user's **MAG sample sheet** by filling its `tax_id` column (resolved from
-  `scientific_name` via the ENA taxonomy API); all other columns pass through unchanged, except a
-  `scientific_name` that only identifies a genus (a bare genus, or a GTDB placeholder such as
-  `Phocaeicola sp900556845`), which is rewritten to the `"<genus> sp."` form ENA accepts.
+- Complete the user's **MAG sample sheet**: each row's GTDB-Tk reference genome accession
+  (`GTDBtk fastani Ref`) is mapped to an NCBI species taxon id, confirmed against ENA, and written
+  back as the `tax_id` plus ENA's own name for it. Rows GTDB-Tk matched no reference for fall back
+  to ENA name lookups walking down the GTDB lineage in `scientific_name`. All other columns pass
+  through unchanged.
 - Invoke Webin-CLI with the right flags and parse the receipt XML for accessions.
 - Record an auditable local submission history.
 
@@ -42,7 +43,9 @@ runtime; every other path (including `mag prepare`) runs without them.
 | `model.rs`    | Domain types: `ReadRecord`, `AssemblyRecord`, `MagBin`, enums, `Context`, `SubmitMode`. |
 | `input.rs`    | Generic order-preserving `Table` (rejects a header-only file) + typed reads/assembly readers with row-level validation. |
 | `manifest.rs` | Render reads/genome manifest files (one per object). |
-| `mag_tsv.rs`  | Fill the `tax_id` column of a MAG sample sheet via the ENA taxonomy API. |
+| `gtdb.rs`     | Parse GTDB-Tk classification strings into their ranks (polyphyly suffixes stripped). |
+| `ncbi.rs`     | Map GTDB-Tk reference genome accessions to NCBI **species** taxon ids (batched NCBI Datasets calls; strains climbed to their species). |
+| `mag_tsv.rs`  | Fill the `tax_id` column of a MAG sample sheet from those ids, confirm them against ENA, and rewrite `scientific_name` to match. |
 | `chromosome.rs` | Detect single-contig MAG bins (gzip-aware FASTA scan) and render/write the chromosome list file for chromosome-level submission. |
 | `webin.rs`    | Shell out to `java -jar webin-cli.jar …` (password via `-passwordEnv`, never argv); preflight credentials + Java 17+/jar checks; abort the run on a rejected account. |
 | `receipt.rs`  | Parse receipt XML → accessions + status. |
@@ -62,9 +65,10 @@ ena-submit status
 
 ## MAG submission flow
 
-1. `mag prepare` — user's near-complete sample sheet → same sheet with `tax_id` filled from
-   `scientific_name` (ENA taxonomy API); genus-only names and GTDB placeholders are retried and
-   rewritten as `"<genus> sp."`.
+1. `mag prepare` — user's near-complete sample sheet → same sheet with `tax_id` filled from the
+   row's `GTDBtk fastani Ref` accession (NCBI Datasets → species taxon → ENA), and
+   `scientific_name` rewritten to ENA's name for it; rows with no reference accession walk down the
+   GTDB lineage as ENA name lookups instead. See ADR 0008.
 2. User uploads the completed sheet via the Webin spreadsheet UI → obtains `ERS…` accessions →
    saves `registered_mags.tsv` (`bin_name → ERS…`).
 3. `mag submit` — per bin: genome manifest with `ASSEMBLY_TYPE="Metagenome-Assembled Genome (MAG)"`
@@ -79,6 +83,8 @@ ena-submit status
 - **Webin-CLI jar** (`enasequence/webin-cli`) and **Java 17+** at runtime.
 - **ENA taxonomy REST API** (`www.ebi.ac.uk/ena/taxonomy/rest`) — reached over HTTPS by `mag prepare`
   only, via the blocking `ureq` client.
+- **NCBI Datasets API** (`api.ncbi.nlm.nih.gov/datasets/v2alpha`) — likewise `mag prepare` only;
+  batched POSTs mapping reference genome accessions to species taxon ids (ADR 0008).
 - Crates: `clap`, `serde`, `serde_json`, `csv`, `toml`, `quick-xml`, `thiserror`, `anyhow`,
   `tracing`, `time`, `regex`, `ureq`, `flate2`.
 

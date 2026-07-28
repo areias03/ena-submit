@@ -9,6 +9,7 @@ mod chromosome;
 mod config;
 #[allow(dead_code)]
 mod error;
+mod gtdb;
 #[allow(dead_code)]
 mod history;
 #[allow(dead_code)]
@@ -16,6 +17,7 @@ mod input;
 mod mag_tsv;
 #[allow(dead_code)]
 mod manifest;
+mod ncbi;
 #[allow(dead_code)]
 mod model;
 #[allow(dead_code)]

@@ -74,6 +74,33 @@ fn mag_prepare_missing_scientific_name_errors_offline() {
 }
 
 #[test]
+fn mag_prepare_missing_reference_column_errors_offline() {
+    let dir = tempfile::tempdir().unwrap();
+    let input = dir.path().join("mags.tsv");
+    // No reference-accession column: rejected before any lookup, like the other required columns.
+    std::fs::write(
+        &input,
+        "sample_alias\ttax_id\tscientific_name\nbin.1\t\td__Bacteria;g__Rothia;s__\n",
+    )
+    .unwrap();
+
+    let out = ena_submit(dir.path())
+        .args(["mag", "prepare"])
+        .arg(&input)
+        .args(["-o", "out.tsv"])
+        .output()
+        .unwrap();
+
+    assert!(!out.status.success());
+    assert!(
+        stderr(&out).contains("missing required column: GTDBtk fastani Ref"),
+        "stderr: {}",
+        stderr(&out)
+    );
+    assert!(!dir.path().join("out.tsv").exists(), "must not write output on error");
+}
+
+#[test]
 fn header_only_input_is_rejected_offline() {
     let dir = tempfile::tempdir().unwrap();
     let input = dir.path().join("mag_samples.tsv");
