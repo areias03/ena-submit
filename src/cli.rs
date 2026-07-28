@@ -65,10 +65,15 @@ struct SubmitArgs {
 
 #[derive(Debug, Subcommand)]
 enum MagCommand {
-    /// Fill the `tax_id` column of a near-complete MAG sample TSV using the ENA taxonomy API,
-    /// resolving each row's `scientific_name`. All other columns are passed through unchanged.
+    /// Fill the `tax_id` column of a near-complete MAG sample TSV, resolving each row's
+    /// `GTDBtk fastani Ref` accession to an NCBI species taxon (NCBI Datasets) and confirming it
+    /// against ENA. Rows with no reference accession fall back to name lookups down the GTDB
+    /// lineage in `scientific_name`. `scientific_name` is rewritten to ENA's name for the taxon;
+    /// all other columns are passed through unchanged.
     Prepare {
-        /// Your MAG sample TSV (all columns filled except `tax_id`).
+        /// Your MAG sample TSV: every column filled except `tax_id`, with GTDB-Tk's
+        /// `classification` in `scientific_name` and its `fastani_reference` in
+        /// `GTDBtk fastani Ref`.
         input: PathBuf,
         /// Where to write the completed sample TSV (ready to upload via the Webin spreadsheet UI).
         #[arg(short, long, default_value = "mag_samples.filled.tsv")]
