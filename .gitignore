@@ -9,3 +9,7 @@ ena-submit.toml
 /webin-cli.jar
 /reads/
 /genome/
+
+
+# Submission data
+data/
