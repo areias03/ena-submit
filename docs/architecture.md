@@ -58,7 +58,7 @@ runtime; every other path (including `mag prepare`) runs without them.
 ena-submit init
 ena-submit reads    <input.tsv> [--validate|--submit] [--test] [--input-dir DIR]
 ena-submit assembly <input.tsv> [--validate|--submit] [--test] [--input-dir DIR]
-ena-submit mag prepare <mags.tsv> [--checklist ERC000050] -o mag_samples.tsv
+ena-submit mag prepare <mags.tsv> [-o mag_samples.filled.tsv]
 ena-submit mag submit  <mags.tsv> --samples registered_mags.tsv [--validate|--submit] [--test]
 ena-submit status
 ```
@@ -69,6 +69,13 @@ ena-submit status
    row's `GTDBtk fastani Ref` accession (NCBI Datasets → species taxon → ENA), and
    `scientific_name` rewritten to ENA's name for it; rows with no reference accession walk down the
    GTDB lineage as ENA name lookups instead. See ADR 0008.
+
+   Three columns are required — `tax_id`, `scientific_name` (GTDB-Tk's `classification`) and
+   `GTDBtk fastani Ref` (its `fastani_reference`); everything else is opaque pass-through. A row
+   whose reference cell is `0` is normal and takes the fallback; one whose accession is real but
+   unknown to NCBI takes the same fallback but is flagged with a `WARN`, since it means the sheet
+   points at an assembly that has been suppressed or replaced. Rows that already carry a `tax_id`
+   are skipped, so re-running on an output sheet is a no-op.
 2. User uploads the completed sheet via the Webin spreadsheet UI → obtains `ERS…` accessions →
    saves `registered_mags.tsv` (`bin_name → ERS…`).
 3. `mag submit` — per bin: genome manifest with `ASSEMBLY_TYPE="Metagenome-Assembled Genome (MAG)"`

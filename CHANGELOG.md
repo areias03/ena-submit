@@ -89,7 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   back to ENA name lookups walking down the lineage: species, `"<genus> sp."`,
   `"uncultured <genus> sp."`, `"<family> bacterium"`, then order, class and phylum. **The full
   sheet now resolves: 2676/2676 rows, every one submittable in ENA.** `GTDBtk fastani Ref` becomes
-  a required column and `init`'s template carries it. The GTDB API was evaluated and rejected: it
+  a required column and `init`'s template carries it. A row whose accession is real but unknown to
+  NCBI — a suppressed or replaced assembly, 4 of them covering 54 rows here — falls back the same
+  way, but is reported with a `WARN` naming the accession and its row count, so a stale sheet is
+  visible rather than silently resolving by name. The GTDB API was evaluated and rejected: it
   serves a Cloudflare Origin certificate chained to no public root, so no correctly configured
   client can reach it. 21 new unit tests plus 1 CLI test; ADR 0008 added, ADR 0004 superseded in
   part.

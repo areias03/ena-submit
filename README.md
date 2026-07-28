@@ -30,6 +30,8 @@ Actual validation/submission requires Java 17+ and the Webin-CLI jar (see Requir
 - For actual submission: **Java 17+** and the **Webin-CLI** jar (not needed for `mag prepare`).
   Webin-CLI **1.8.12 or newer** is required, since the password is passed via `-passwordEnv`;
   verified against 9.0.3. Any current release is fine — 1.8.12 dates from 2019.
+- For `mag prepare`: outbound HTTPS to **`api.ncbi.nlm.nih.gov`** and **`www.ebi.ac.uk`**. No
+  credentials or API key are needed for either.
 
 ## Install
 
@@ -60,7 +62,9 @@ unfilled template fails loudly instead of reporting a run with nothing to do as 
 1. `mag prepare <mags.tsv> -o mag_samples.filled.tsv` — fills the `tax_id` column and rewrites
    `scientific_name`; all other checklist columns pass through unchanged.
 
-   Two columns are copied straight out of GTDB-Tk's summary and drive the whole step:
+   The sheet needs three columns — `tax_id` (left empty) plus two copied straight out of GTDB-Tk's
+   summary. Every other checklist column is passed through untouched, so the sheet's shape is yours
+   to decide.
 
    | column | GTDB-Tk field | example |
    | --- | --- | --- |
@@ -94,6 +98,14 @@ unfilled template fails loudly instead of reporting a run with nothing to do as 
    | `g__Rothia;s__` | `uncultured Rothia sp.` |
    | `g__Merdisoma;s__` (GTDB-only genus) | `Lachnospiraceae bacterium` |
    | `f__Eggerthellaceae;g__;s__` | `Eggerthellaceae bacterium` |
+
+   The same fallback catches a row whose accession is real but **unknown to NCBI** — an assembly
+   that has been suppressed or replaced since your GTDB-Tk run. Those are flagged, once per
+   accession, because they mean the sheet is stale rather than merely unclassified:
+
+   ```
+   WARN reference accession not found in NCBI; falling back to the classification accession="GCA_902363515.1" rows=44
+   ```
 
    `mag prepare` reports how many cells it rewrote and how many took the fallback. A row whose cell
    is not a classification, or that nothing resolves, is reported with its row number; all such rows

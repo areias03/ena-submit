@@ -1,14 +1,15 @@
-# 5. Blocking HTTP via `ureq` for ENA REST calls
+# 5. Blocking HTTP via `ureq` for REST calls
 
 - Status: accepted
 - Date: 2026-07-23
 
 ## Context
 
-`mag prepare` (see [ADR 0004](0004-mag-sample-taxid-fill.md)) introduced the tool's first — and so
-far only — network dependency: resolving each `scientific_name` to a taxon id via the ENA taxonomy
-REST API. This decision was made during that milestone but never recorded, so it is captured here
-retroactively.
+`mag prepare` (see [ADR 0004](0004-mag-sample-taxid-fill.md)) introduced the tool's first network
+dependency: resolving each `scientific_name` to a taxon id via the ENA taxonomy REST API. It was
+the only one at the time; [ADR 0008](0008-mag-taxid-from-reference-accession.md) later added a
+second (NCBI Datasets). This decision was made during that milestone but never recorded, so it is
+captured here retroactively.
 
 The rest of the tool is synchronous and single-threaded, with no async runtime. The HTTP calls it
 makes are straight-line, sequential (one taxonomy lookup per sheet row). The realistic client
@@ -39,5 +40,13 @@ small and, via rustls + bundled webpki roots, needs no system OpenSSL.
   stands. `EnaTaxonomy` now holds a shared `ureq::Agent` so those requests reuse one pooled
   connection (measured ~0.7 s of handshake saved per request) and carry connect/read timeouts,
   which the previous per-call `ureq::get` did not set.
-- Sets the precedent that ENA REST calls are blocking; the submission path shells out to Webin-CLI
+
+  **Update (2026-07-28):** [ADR 0008](0008-mag-taxid-from-reference-accession.md) moved taxon
+  resolution onto the reference genome accession, adding NCBI Datasets as a second host. It
+  *reinforces* this decision rather than straining it: its endpoints take 100–200 keys per request,
+  so a full sheet is about five POSTs. `NcbiDatasets` follows the same shape as `EnaTaxonomy` — a
+  pooled `ureq::Agent` with the same timeouts — and additionally retries HTTP 429 with a short
+  backoff, since NCBI rate-limits unauthenticated callers. A full run is now ~5 batched POSTs plus
+  ~272 memoized ENA GETs, still comfortably sequential.
+- Sets the precedent that REST calls are blocking; the submission path shells out to Webin-CLI
   ([ADR 0002](0002-wrap-webin-cli-hybrid.md)) rather than making HTTP calls itself.

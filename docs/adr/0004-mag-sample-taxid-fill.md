@@ -1,10 +1,15 @@
 # 4. MAG samples: complete the user's sheet by filling `tax_id`
 
-- Status: accepted; **name resolution superseded by
-  [ADR 0008](0008-mag-taxid-from-reference-accession.md)**, which resolves the taxon id from the
-  row's GTDB-Tk reference genome accession instead. The decisions below about *completing* the
-  user's sheet still hold; the name-matching described here now survives only as ADR 0008's
-  fallback for rows GTDB-Tk matched no reference for.
+- Status: accepted, with two parts superseded by
+  [ADR 0008](0008-mag-taxid-from-reference-accession.md):
+  - **how the taxon id is resolved** — from the row's GTDB-Tk reference genome accession, not by
+    matching its name against ENA. The name-matching described below survives only as ADR 0008's
+    fallback for rows GTDB-Tk matched no reference for;
+  - **the required-column set** — `GTDBtk fastani Ref` joins `scientific_name` and `tax_id`.
+
+  Everything else here still holds: `mag prepare` *completes* the user's sheet rather than
+  generating one, reads it with the generic `Table`, and passes every other column through
+  untouched.
 - Date: 2026-07-23
 - Supersedes the MAG-sample half of [ADR 0003](0003-tsv-input-and-mag-tsv-only.md)
 
