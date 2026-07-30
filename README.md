@@ -126,8 +126,10 @@ command line, so it does not show up in `ps` output for other users on a shared 
 
 ## Documentation
 
-See [`docs/architecture.md`](docs/architecture.md) and the architecture decision records in
-[`docs/adr/`](docs/adr/).
+- [`docs/tutorial.md`](docs/tutorial.md) — a walk-through of every command, with example inputs and
+  the output each one produces.
+- [`docs/architecture.md`](docs/architecture.md) and the architecture decision records in
+  [`docs/adr/`](docs/adr/).
 
 ## License
 
