@@ -1,0 +1,37 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+# A new push to the same branch/PR makes the in-flight run redundant.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-and-test:
+    name: build & test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `stable` rather than a pinned version: the crate needs edition 2024 (Rust 1.85+), and
+      # nothing here depends on a specific compiler release.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # --locked: Cargo.lock is committed, so CI builds exactly the versions developers do and
+      # fails loudly if the lockfile is out of date rather than silently resolving something else.
+      - name: Build
+        run: cargo build --locked --all-targets
+
+      # The suite is offline by design — no Java, no Webin-CLI jar, and no network calls to ENA or
+      # NCBI — so the runner needs nothing beyond the toolchain.
+      - name: Test
+        run: cargo test --locked
